@@ -1,0 +1,15 @@
+---
+description: Commit (and push when remote exists) after each completed user task
+alwaysApply: true
+---
+
+# Commit after every task
+
+After finishing the work for a user query (features, fixes, docs, firmware, Pi scripts, rules):
+
+1. Create a git commit for the relevant changes in this repo — do not wait to be asked.
+2. Use a concise message focused on why (1–2 sentences). Follow the repo’s existing commit style once history exists.
+3. Do not commit secrets (`.env`, credentials, private keys) or large generated junk; respect `.gitignore`.
+4. If a GitHub/remote is configured for this repo, push after a successful commit (`git push -u` on first push for the branch).
+5. If there is nothing to commit, skip silently (no empty commits).
+6. This project rule overrides the general “only commit when asked” preference for **this** repository.

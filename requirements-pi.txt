@@ -1,0 +1,23 @@
+# Prefer apt packages on the Raspberry Pi (see scripts/setup_pi.sh).
+# This file documents what the Pi needs; do not pip-install OpenCV/picamera2 on Zero 2.
+
+# System (apt):
+#   python3-picamera2
+#   python3-opencv
+#   python3-gpiozero
+#   python3-flask
+
+# Teachable Machine live path (pip into ~/arrow-env):
+#   pip install ai-edge-litert
+#   (tflite-runtime has no wheels for Python 3.13; ai-edge-litert replaces it)
+
+# RP2040 UART client (pip into ~/arrow-env):
+#   pip install pyserial
+
+# Sonar debug Flask UI (pip into ~/arrow-env):
+#   pip install flask
+
+# Optional laptop-only smoke test (mock camera):
+#   opencv-python
+#   flask
+#   numpy

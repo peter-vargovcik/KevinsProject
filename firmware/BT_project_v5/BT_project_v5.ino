@@ -117,6 +117,8 @@ const uint32_t PULLOVER_STABLE_MS = 400;
 const uint32_t PULLOVER_RANGE_TX_MS = 200;
 const uint32_t SONAR_TIMEOUT_US = 25000;  // ~4 m
 const uint32_t SONAR_GAP_MS = 60;         // stagger sensors
+// Must be > (enabled_count * SONAR_GAP_MS) or a channel goes stale → -1.
+const uint32_t SONAR_STALE_MS = 450;
 
 // Serial receive buffer
 const size_t COMMAND_BUFFER_SIZE = 64;
@@ -348,7 +350,7 @@ void updateSonarDistances() {
     echo = sonars[i].echoUs;
     lastMs = sonars[i].lastEchoMs;
     interrupts();
-    if (lastMs == 0 || (uint32_t)(nowMs - lastMs) > 200) {
+    if (lastMs == 0 || (uint32_t)(nowMs - lastMs) > SONAR_STALE_MS) {
       sonars[i].distanceCm = -1;
       continue;
     }
@@ -381,29 +383,32 @@ void serviceSonar() {
     return;
   }
 
-  // Prefer FRONT every other ping when it is enabled (fresh collision data).
+  // Diag: fair round-robin so RIGHT is not starved.
+  // Pullover: still prefer FRONT every other ping for collision stop.
   uint8_t pick = 255;
-  if (sonars[SONAR_FRONT].enabled && ((sonarPingPhase++ & 1) == 0)) {
+  const bool preferFront =
+      (!sonarDiagContinuous && sonarDiagUntilMs == 0) &&
+      sonars[SONAR_FRONT].enabled &&
+      (sonars[SONAR_LEFT].enabled || sonars[SONAR_RIGHT].enabled);
+
+  if (preferFront && ((sonarPingPhase++ & 1) == 0)) {
     pick = SONAR_FRONT;
   } else {
     for (int n = 0; n < SONAR_COUNT; n++) {
-      uint8_t idx = (sonarScanIndex + 1 + n) % SONAR_COUNT;
+      uint8_t idx = (uint8_t)((sonarScanIndex + 1 + n) % SONAR_COUNT);
       if (!sonars[idx].enabled) {
         continue;
       }
-      // On the alternate phase, skip FRONT so a side sensor gets a turn.
-      if (idx == SONAR_FRONT && sonars[SONAR_FRONT].enabled &&
-          (sonars[SONAR_LEFT].enabled || sonars[SONAR_RIGHT].enabled)) {
+      if (preferFront && idx == SONAR_FRONT) {
         continue;
       }
       pick = idx;
       break;
     }
-    // Fallback: any enabled sensor
     if (pick == 255) {
       for (int n = 0; n < SONAR_COUNT; n++) {
         if (sonars[n].enabled) {
-          pick = n;
+          pick = (uint8_t)n;
           break;
         }
       }

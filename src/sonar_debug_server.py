@@ -207,7 +207,7 @@ PAGE = r"""<!DOCTYPE html>
   <main>
     <section class="card" data-key="front">
       <div class="label">Front</div>
-      <div class="pin">TRIG GP6 · ECHO GP7</div>
+      <div class="pin">TRIG GP14 · ECHO GP15</div>
       <div class="value dead" id="v-front">—</div>
       <div class="bar"><span id="b-front"></span></div>
     </section>
@@ -219,7 +219,7 @@ PAGE = r"""<!DOCTYPE html>
     </section>
     <section class="card" data-key="right">
       <div class="label">Right</div>
-      <div class="pin">TRIG GP10 · ECHO GP11</div>
+      <div class="pin">TRIG GP16 · ECHO GP17</div>
       <div class="value dead" id="v-right">—</div>
       <div class="bar"><span id="b-right"></span></div>
     </section>

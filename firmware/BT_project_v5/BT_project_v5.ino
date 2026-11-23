@@ -47,13 +47,14 @@ const uint8_t THROTTLE_OUT = 5;
 const uint8_t PI_TX = 12;
 const uint8_t PI_RX = 13;
 
-// HC-SR04 (ECHO via 10k/16k divider into 3.3 V GPIO)
-const uint8_t SONAR_FRONT_TRIG = 6;
-const uint8_t SONAR_FRONT_ECHO = 7;
+// HC-SR04 (ECHO via dual 10k divider into 3.3 V GPIO)
+// Front/right moved off GP6/7 and GP10/11 (suspect harness / flaky reads).
+const uint8_t SONAR_FRONT_TRIG = 14;
+const uint8_t SONAR_FRONT_ECHO = 15;
 const uint8_t SONAR_LEFT_TRIG  = 8;
 const uint8_t SONAR_LEFT_ECHO  = 9;
-const uint8_t SONAR_RIGHT_TRIG = 10;
-const uint8_t SONAR_RIGHT_ECHO = 11;
+const uint8_t SONAR_RIGHT_TRIG = 16;
+const uint8_t SONAR_RIGHT_ECHO = 17;
 
 const uint32_t PI_BAUD = 115200;
 
@@ -1506,7 +1507,7 @@ void setup() {
   Serial.println("=================================");
   Serial.println("UART: 115200 baud");
   Serial.println("TX: GP12 | RX: GP13");
-  Serial.println("Sonar F:6/7 L:8/9 R:10/11 (off until PULLOVER)");
+  Serial.println("Sonar F:14/15 L:8/9 R:16/17 (off until PULLOVER)");
   Serial.println("Initial mode: MANUAL");
   Serial.println("Initial caps: F20% / R20%");
   Serial.println("AUTO/OVERRIDE/PULLOVER heartbeat timeout: 250 ms");

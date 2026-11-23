@@ -240,7 +240,7 @@ Keep wheels lifted for first runs. Transmitter on with live RC (Pi seizes contro
 
 ## Pull-over (BT_project_v5 + HC-SR04)
 
-Wiring: [docs/HC_SR04_Wiring.md](docs/HC_SR04_Wiring.md) (GP6–11).  
+Wiring: [docs/HC_SR04_Wiring.md](docs/HC_SR04_Wiring.md) (Front GP14/15, Left GP8/9, Right GP16/17).  
 Plan PDF: [docs/RP2040_PullOver_Plan.pdf](docs/RP2040_PullOver_Plan.pdf).
 
 On the Pi (after sensors are fitted):

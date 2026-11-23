@@ -244,9 +244,9 @@ def build():
         table(
             [
                 ["Sensor", "TRIG", "ECHO (via divider)"],
-                ["Front", "GP6", "GP7"],
+                ["Front", "GP14", "GP15"],
                 ["Left", "GP8", "GP9"],
-                ["Right", "GP10", "GP11"],
+                ["Right", "GP16", "GP17"],
             ],
             [5 * cm, 5 * cm, 6 * cm],
         )
@@ -297,7 +297,7 @@ def build():
         bullets(
             [
                 "<b>Firmware BT_project_v5:</b> non-blocking HC-SR04 driver, enable/disable, PULLOVER state machine, abort/front ESTOP, RANGE lines.",
-                "<b>Docs:</b> wiring map for GP6–11 with echo dividers.",
+                "<b>Docs:</b> wiring map (F14/15 L8/9 R16/17) with dual-10k echo dividers.",
                 "<b>Pi (KevinsProject):</b> extend rp2040_uart.py; add test_pullover.py; update COMMANDS.md.",
             ],
             s,

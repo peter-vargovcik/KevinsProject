@@ -1442,6 +1442,13 @@ void printDiagnostics() {
     Serial.print(sonarFrontCm());
     Serial.print(" S=");
     Serial.print(sonarSideCm());
+  } else if (sonarDiagContinuous || sonarDiagUntilMs != 0) {
+    Serial.print("DIAG F=");
+    Serial.print(sonars[SONAR_FRONT].distanceCm);
+    Serial.print(" L=");
+    Serial.print(sonars[SONAR_LEFT].distanceCm);
+    Serial.print(" R=");
+    Serial.print(sonars[SONAR_RIGHT].distanceCm);
   } else {
     Serial.print("OFF");
   }

@@ -220,6 +220,9 @@ uint32_t throttleErrors = 0;
 
 // Serial receive state
 char commandBuffer[COMMAND_BUFFER_SIZE];
+char usbCommandBuffer[COMMAND_BUFFER_SIZE];
+size_t usbCommandLength = 0;
+bool usbDiscardingLine = false;
 size_t commandLength = 0;
 bool discardingLine = false;
 
@@ -1312,6 +1315,61 @@ void readPiSerial() {
   }
 }
 
+// USB Serial: sonar bench commands when Pi is offline.
+void handleUsbSonarCommand(char* line) {
+  if (strcmp(line, "SONAR,ON") == 0 || strcmp(line, "SONAR?") == 0) {
+    if (mode == MODE_PULLOVER) {
+      Serial.println("ERR,PULLOVER,ACTIVE");
+      return;
+    }
+    sonarEnableAll();
+    lastRangeTxMs = 0;
+    if (strcmp(line, "SONAR,ON") == 0) {
+      sonarDiagContinuous = true;
+      sonarDiagUntilMs = 0;
+      Serial.println("OK,SONAR,ON");
+    } else {
+      sonarDiagContinuous = false;
+      sonarDiagUntilMs = millis() + 3000;
+      Serial.println("OK,SONAR");
+    }
+    return;
+  }
+  if (strcmp(line, "SONAR,OFF") == 0) {
+    sonarDisableAll();
+    sonarDiagContinuous = false;
+    sonarDiagUntilMs = 0;
+    Serial.println("OK,SONAR,OFF");
+    return;
+  }
+  Serial.println("ERR,USB_ONLY_SONAR");
+}
+
+void readUsbSerial() {
+  for (int i = 0; i < 64 && Serial.available(); i++) {
+    char c = (char)Serial.read();
+    if (c == '\n') {
+      if (!usbDiscardingLine && usbCommandLength > 0) {
+        usbCommandBuffer[usbCommandLength] = '\0';
+        handleUsbSonarCommand(usbCommandBuffer);
+      }
+      usbCommandLength = 0;
+      usbDiscardingLine = false;
+    } else if (c != '\r') {
+      if (usbDiscardingLine) {
+        continue;
+      }
+      if (usbCommandLength < COMMAND_BUFFER_SIZE - 1) {
+        usbCommandBuffer[usbCommandLength++] = c;
+      } else {
+        usbCommandLength = 0;
+        usbDiscardingLine = true;
+        Serial.println("ERR,LINE_TOO_LONG");
+      }
+    }
+  }
+}
+
 // ---------------- SAFETY + CONTROL LOOP ----------------------
 
 void updateControl() {
@@ -1519,7 +1577,8 @@ void setup() {
   Serial.println("=================================");
   Serial.println("UART: 115200 baud");
   Serial.println("TX: GP12 | RX: GP13");
-  Serial.println("Sonar F:14/15 L:8/9 R:16/17 (off until PULLOVER)");
+  Serial.println("Sonar F:14/15 L:8/9 R:16/17");
+  Serial.println("USB: SONAR,ON | SONAR,OFF | SONAR?");
   Serial.println("Initial mode: MANUAL");
   Serial.println("Initial caps: F20% / R20%");
   Serial.println("AUTO/OVERRIDE/PULLOVER heartbeat timeout: 250 ms");
@@ -1536,6 +1595,7 @@ void loop() {
   // Read serial before applying control, so STOP and
   // updated caps take effect in the same loop iteration.
   readPiSerial();
+  readUsbSerial();
 
   serviceSonar();
 
@@ -1550,12 +1610,20 @@ void loop() {
       Serial1.print(sonars[SONAR_LEFT].distanceCm);
       Serial1.print(',');
       Serial1.println(sonars[SONAR_RIGHT].distanceCm);
+      // Mirror to USB for bench without Pi
+      Serial.print("RANGE3,");
+      Serial.print(sonars[SONAR_FRONT].distanceCm);
+      Serial.print(',');
+      Serial.print(sonars[SONAR_LEFT].distanceCm);
+      Serial.print(',');
+      Serial.println(sonars[SONAR_RIGHT].distanceCm);
     }
     if (!sonarDiagContinuous && sonarDiagUntilMs != 0 &&
         (int32_t)(nowMs - sonarDiagUntilMs) >= 0) {
       sonarDisableAll();
       sonarDiagUntilMs = 0;
       Serial1.println("DONE,SONAR");
+      Serial.println("DONE,SONAR");
     }
   }
 

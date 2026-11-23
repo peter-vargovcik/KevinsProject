@@ -1,0 +1,19 @@
+[Unit]
+Description=Kevin sonar debug Flask UI (RP2040 RANGE3)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/KevinsProject
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/pi/arrow-env/bin/python /home/pi/KevinsProject/src/sonar_debug_server.py
+Restart=always
+RestartSec=5
+# Soft limit: if process exits loop, systemd brings it back
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -291,6 +291,16 @@ def api_state():
     return jsonify(_snapshot())
 
 
+@app.get("/api/health")
+def api_health():
+    """Liveness for systemd / curl watchdog (UART optional)."""
+    uart_ok = False
+    with _client_lock:
+        uart_ok = _client is not None and _client._ser is not None and _client._ser.is_open
+    body = {"ok": True, "uart": uart_ok, "port": PORT}
+    return jsonify(body), 200
+
+
 @app.post("/api/sonar/on")
 def api_sonar_on():
     try:

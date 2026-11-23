@@ -257,14 +257,25 @@ python src/test_pullover.py left
 
 Live front / left / right distances (`SONAR,ON` → `RANGE3,f,l,r`). No driving.
 
+Browser: `http://192.168.1.152:8088/` → **Sonar ON** / **OFF**.
+
+**Start on boot** (systemd + 60 s health watchdog):
+
+```
+cd ~/KevinsProject
+bash scripts/pi/install_sonar_debug_service.sh
+sudo systemctl status sonar-debug
+curl -s http://127.0.0.1:8088/api/health
+```
+
+Manual run (if not using systemd):
+
 ```
 cd ~/KevinsProject
 source ~/arrow-env/bin/activate
 pip install flask
 python src/sonar_debug_server.py
 ```
-
-On a laptop browser: `http://192.168.1.152:8088/` (Pi LAN IP). Use **Sonar ON** / **OFF**.
 
 CLI one-shot (3 s): firmware also accepts `SONAR?`. Continuous: `SONAR,ON` / `SONAR,OFF`.
 

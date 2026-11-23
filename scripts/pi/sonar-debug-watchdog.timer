@@ -1,0 +1,11 @@
+[Unit]
+Description=Run sonar-debug health check every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=sonar-debug-watchdog.service
+
+[Install]
+WantedBy=timers.target

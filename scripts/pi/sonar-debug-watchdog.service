@@ -1,0 +1,7 @@
+[Unit]
+Description=Heartbeat check for sonar-debug Flask UI
+After=sonar-debug.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/pi/KevinsProject/scripts/pi/sonar-debug-watchdog.sh

@@ -116,10 +116,11 @@ const uint32_t OVERRIDE_NEUTRAL_HOLD_MS = 500;
 
 // Pull-over (HC-SR04 closed loop on RP2040)
 // Runtime-tunable via PULLOVER,SET / PULLOVER,CFG? (defaults below).
+// Defaults match last tuned bench CFG (Flask / PULLOVER,CFG?).
 int pulloverSideTargetCm = 10;
 int pulloverSideBandCm = 2;              // accept target±band cm
 int pulloverFrontStopCm = 25;
-int pulloverCreepCap = 12;               // % of forward PWM span
+int pulloverCreepCap = 10;               // % of forward PWM span
 int pulloverSteerMax = 28;               // % steer toward wall
 uint32_t pulloverTimeoutMs = 15000;
 uint32_t pulloverStableMs = 400;
@@ -1680,7 +1681,7 @@ void setup() {
   Serial.println("Initial caps: F20% / R20%");
   Serial.println("AUTO/OVERRIDE/PULLOVER heartbeat timeout: 250 ms");
   Serial.println("Override: F15% R10%, steer +/-50, max 1500ms");
-  Serial.println("Pullover defaults: side 10cm band 2 front 25 creep 12");
+  Serial.println("Pullover defaults: side 10cm band 2 front 25 creep 10");
   Serial.println("PULLOVER,CFG? | PULLOVER,SET,<KEY>,<val>");
   Serial.println("Waiting for receiver and neutral...");
 }

@@ -40,7 +40,7 @@ PULLOVER_DEFAULTS = {
     "side": 10,
     "band": 2,
     "front": 25,
-    "creep": 12,
+    "creep": 10,
     "steer": 28,
     "stable": 400,
     "timeout": 15000,
@@ -395,8 +395,8 @@ PAGE = r"""<!DOCTYPE html>
     </div>
     <div class="row">
       <label class="cap">Creep
-        <input type="range" id="poCreep" min="5" max="40" value="12"/>
-        <span class="capnum"><span id="poCreepN">12</span>%</span>
+        <input type="range" id="poCreep" min="5" max="40" value="10"/>
+        <span class="capnum"><span id="poCreepN">10</span>%</span>
       </label>
       <label class="cap">Steer max
         <input type="range" id="poSteer" min="5" max="50" value="28"/>

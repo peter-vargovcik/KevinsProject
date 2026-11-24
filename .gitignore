@@ -21,3 +21,4 @@ temp/
 logs/
 *.zip
 models/teachable/*.zip
+models/teachable/archives/

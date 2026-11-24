@@ -260,10 +260,13 @@ Browser: `http://192.168.1.152:8088/`
 - Live STATUS + sonar gauges (`SONAR,ON` / `OFF`)
 - Pull-over LEFT / RIGHT / ABORT
 - Pullover params (SIDE/BAND/FRONT/CREEP/STEER/STABLE/TIMEOUT) via `PULLOVER,SET` / `CFG?`
+- **Detection arm** → CSI + quantized TFLite; consecutive `wrong` → auto-pullover
+- Armed-only MJPEG preview (`/api/detection/mjpeg`)
 - Virtual joystick (Pi control ON → AUTO + capped DRIVE pulses)
-- Throttle caps default **25%** (sliders 0–100, Apply caps)
-- Joystick pulse duration (Flask-local, default 280 ms)
+- Throttle caps default **25%**; joystick pulse ms
 - STOP / RESET / MANUAL
+
+**LEDs (owned by `sonar-debug`):** green GPIO21 = ready (UART+UI), yellow GPIO16 = detection armed, red GPIO20 = wrong streak / pullover. Do not run `live_arrow_*` at the same time (GPIO busy).
 
 UART (examples):
 
@@ -299,8 +302,8 @@ Keep wheels lifted for early tests. Use `stop` if needed.
 
 ## Notes
 
-- LEDs: green GPIO21, yellow GPIO16, red GPIO20
-- Model files: `~/KevinsProject/models/teachable/model.tflite` and `labels.txt`
+- LEDs: green GPIO21 = console ready, yellow GPIO16 = detection armed, red GPIO20 = wrong/pullover
+- Model: quantized `~/KevinsProject/models/teachable/model.tflite` + `labels.txt` (`frwrd`→correct, `rvrs`→wrong, `Contrl`→none)
 - One-time TFLite install: `pip install ai-edge-litert`
 - One-time UART client: `pip install pyserial`
 - If you see `GPIO busy`, force kill, wait a few seconds, start again

@@ -4,20 +4,22 @@
 Features:
   - Live STATUS + sonar RANGE3
   - Sonar ON/OFF
-  - Pull-over LEFT / RIGHT / ABORT
+  - Pull-over LEFT / RIGHT / ABORT + runtime CFG
   - Virtual joystick (MODE,AUTO + CAP + DRIVE pulses)
-  - Throttle caps default 25% (user-adjustable 0–100)
-  - Pullover tunables (SIDE/BAND/FRONT/CREEP/STEER/STABLE/TIMEOUT)
-  - Joystick pulse duration (Flask-local)
-  - STOP / RESET / MANUAL
+  - Throttle caps default 25%; joystick pulse ms
+  - Status LEDs: green=ready, yellow=detection armed, red=wrong/pullover
+  - Armed TFLite detection → consecutive wrong → auto-pullover
+  - Armed-only MJPEG preview
 
   http://<pi-ip>:8088/
 """
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -28,7 +30,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, Response, jsonify, render_template_string, request
 
+from detection_worker import DETECTION_DEFAULTS, DetectionWorker  # noqa: E402
 from rp2040_uart import Rp2040Client, parse_status  # noqa: E402
+from status_leds import get_leds  # noqa: E402
 
 HOST = "0.0.0.0"
 PORT = 8088
@@ -88,6 +92,7 @@ _state: dict[str, Any] = {
     "pi_control": False,
     "joystick_ms": DEFAULT_JOYSTICK_MS,
     "pullover": dict(PULLOVER_DEFAULTS),
+    "uart_ready": False,
     "last_event": "",
     "log": [],
 }
@@ -95,10 +100,61 @@ _joystick_ms = DEFAULT_JOYSTICK_MS
 _log: Deque[str] = deque(maxlen=LOG_MAX)
 _client: Optional[Rp2040Client] = None
 _client_lock = threading.Lock()
+_cmd_lock = threading.Lock()
 _pi_control = False
 _hb_started = False
 _status_thread: Optional[threading.Thread] = None
 _status_stop = threading.Event()
+_uart_fail_streak = 0
+_leds = get_leds()
+_detection: Optional[DetectionWorker] = None
+
+
+def _get_detection() -> DetectionWorker:
+    global _detection
+    if _detection is None:
+        _detection = DetectionWorker(
+            leds=_leds,
+            on_pullover=_auto_pullover,
+            on_log=_push_log,
+        )
+    return _detection
+
+
+def _auto_pullover(side: str) -> None:
+    """Called from detection thread when wrong streak hits threshold."""
+    side_u = side.strip().upper()
+    try:
+        with _cmd_lock:
+            c = _get_client()
+            try:
+                c.sonar_off()
+            except Exception:
+                pass
+            _ensure_heartbeat()
+            if side_u == "LEFT":
+                msg = c.pullover_left()
+            else:
+                msg = c.pullover_right()
+        _push_log(msg)
+        # Wait for DONE/ERR in a short background waiter
+        threading.Thread(
+            target=_wait_auto_pullover_done, args=(c,), daemon=True, name="pull-wait"
+        ).start()
+    except Exception as exc:
+        _push_log(f"ERR,AUTO_PULLOVER,{exc}")
+        _get_detection().set_pullover_busy(False)
+
+
+def _wait_auto_pullover_done(c: Rp2040Client) -> None:
+    try:
+        # Do not hold _cmd_lock — wait_line only reads the RX queue.
+        line = c.wait_pullover_done(timeout_s=20.0)
+        _push_log(line)
+    except Exception as exc:
+        _push_log(f"ERR,PULLOVER_WAIT,{exc}")
+    finally:
+        _get_detection().mark_pullover_done()
 
 
 def _push_log(msg: str) -> None:
@@ -171,6 +227,11 @@ def _on_line(line: str) -> None:
         ("DONE,", "ERR,", "OK,PULLOVER", "OK,SONAR", "OK,DRIVE", "OK,AUTO", "OK,MANUAL", "OK,STOP", "OK,RESET")
     ):
         _push_log(line)
+        if line.startswith("DONE,PULLOVER") or line.startswith("ERR,PULLOVER"):
+            try:
+                _get_detection().mark_pullover_done()
+            except Exception:
+                pass
 
 
 def _get_client() -> Rp2040Client:
@@ -197,16 +258,33 @@ def _snapshot() -> dict[str, Any]:
         snap["joystick_ms"] = _joystick_ms
         snap["pullover"] = dict(_state.get("pullover") or PULLOVER_DEFAULTS)
         snap["log"] = list(_log)
-        return snap
+    snap.update(_get_detection().snapshot())
+    return snap
+
+
+def _set_uart_ready(ok: bool) -> None:
+    global _uart_fail_streak
+    with _lock:
+        _state["uart_ready"] = ok
+    if ok:
+        _uart_fail_streak = 0
+        _leds.set_ready(True)
+    else:
+        _uart_fail_streak += 1
+        if _uart_fail_streak >= 3:
+            _leds.set_ready(False)
 
 
 def _status_loop() -> None:
+    global _uart_fail_streak
     while not _status_stop.wait(0.5):
         try:
-            c = _get_client()
-            c.status()
+            with _cmd_lock:
+                c = _get_client()
+                c.status()
+            _set_uart_ready(True)
         except Exception:
-            pass
+            _set_uart_ready(False)
 
 
 def _start_status_poller() -> None:
@@ -335,6 +413,11 @@ PAGE = r"""<!DOCTYPE html>
   }
   .err { color: var(--bad); min-height: 1.2em; margin-top: .5rem; font-size: .85rem; }
   .hint { color: var(--muted); font-size: .8rem; margin-top: .45rem; line-height: 1.35; }
+  .preview {
+    width: 100%; max-width: 640px; aspect-ratio: 4/3; object-fit: contain;
+    background: #0a0e12; border: 1px solid var(--line); display: block; margin-top: .6rem;
+  }
+  .chk { display: flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -415,6 +498,54 @@ PAGE = r"""<!DOCTYPE html>
       <button type="button" id="btnApplyPullCfg" class="accent">Apply pullover params</button>
       <button type="button" id="btnReloadPullCfg">Reload from board</button>
     </div>
+  </section>
+
+  <section class="panel" style="grid-column: 1 / -1">
+    <h2>Detection / auto-pullover</h2>
+    <div class="row">
+      <button type="button" id="btnDetArm" class="ok">Arm detection</button>
+      <button type="button" id="btnDetDisarm" class="bad">Disarm</button>
+    </div>
+    <p class="hint">Green LED = console ready. Yellow = armed (camera + TFLite). Red = wrong streak / pullover. Consecutive <code>wrong</code> fires pullover. Do not run live_arrow_* while this owns the LEDs.</p>
+    <div class="row">
+      <label class="cap">Wrong streak N
+        <input type="range" id="detStreak" min="2" max="30" value="5"/>
+        <span class="capnum"><span id="detStreakN">5</span></span>
+      </label>
+      <label class="cap">Confidence min
+        <input type="range" id="detConf" min="30" max="95" value="60"/>
+        <span class="capnum"><span id="detConfN">0.60</span></span>
+      </label>
+      <label class="cap">Cooldownoldown
+        <input type="range" id="detCool" min="3000" max="120000" step="1000" value="15000"/>
+        <span class="capnum"><span id="detCoolN">15000</span> ms</span>
+      </label>
+      <label class="cap">Process every N
+        <input type="range" id="detEvery" min="1" max="10" value="2"/>
+        <span class="capnum"><span id="detEveryN">2</span></span>
+      </label>
+      <label class="cap">JPEG quality
+        <input type="range" id="detJpeg" min="40" max="85" value="65"/>
+        <span class="capnum"><span id="detJpegN">65</span></span>
+      </label>
+    </div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="detAuto" checked/> Auto-pullover</label>
+      <label class="chk"><input type="checkbox" id="detPreview" checked/> Preview</label>
+      <label class="chk"><input type="checkbox" id="detNoneReset" checked/> none resets streak</label>
+      <label class="chk"><input type="checkbox" id="detCorrectReset" checked/> correct resets streak</label>
+      <label class="chk"><input type="checkbox" id="detDisarmAfter"/> Disarm after pullover</label>
+      <label class="cap" style="min-width:7rem;flex:0">Side
+        <select id="detSide" style="background:#12171c;color:var(--ink);border:1px solid var(--line);padding:.35rem">
+          <option value="RIGHT" selected>RIGHT</option>
+          <option value="LEFT">LEFT</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <button type="button" id="btnDetCfg" class="accent">Apply detection cfg</button>
+    </div>
+    <img id="detPreviewImg" class="preview" alt="detection preview (armed only)" src=""/>
   </section>
 
   <section class="panel">
@@ -507,11 +638,27 @@ function render(s) {
     ["joy pulse", (s.joystick_ms ?? "?") + " ms"],
     ["drive", s.drive_active ? "1" : "0"],
     ["sonar", s.sonar_active ? "ON" : "OFF"],
+    ["uart ready", s.uart_ready ? "1" : "0"],
+    ["detect", s.detection_armed ? "ARMED" : "off"],
+    ["pred", `${s.pred_label || "—"} ${(s.pred_conf||0).toFixed?.(2) ?? s.pred_conf} [${s.pred_status||"—"}]`],
+    ["wrong streak", `${s.wrong_streak ?? 0} / ${(s.detection_cfg||{}).wrong_streak_n ?? "?"}`],
+    ["cool left", (s.cooldown_remaining_ms ?? 0) + " ms"],
     ["pi control", s.pi_control ? "ON" : "OFF"],
     ["uptime", s.uptime_ms + " ms"],
   ];
   $("statusKv").innerHTML = kv.map(([k,v]) => `<span>${k}</span><span>${v}</span>`).join("");
   syncPullSliders(p);
+  syncDetCfg(s.detection_cfg);
+  const img = $("detPreviewImg");
+  if (s.detection_armed && s.preview_enable) {
+    if (!img.dataset.live) {
+      img.dataset.live = "1";
+      img.src = "/api/detection/mjpeg?t=" + Date.now();
+    }
+  } else {
+    img.dataset.live = "";
+    img.removeAttribute("src");
+  }
   if (typeof s.joystick_ms === "number" &&
       !(document.activeElement && document.activeElement.id === "joyMs")) {
     $("joyMs").value = s.joystick_ms;
@@ -519,7 +666,33 @@ function render(s) {
   }
   if (s.log && s.log.length) $("log").textContent = s.log.join("\n");
   if (s.error) setErr(s.error); else if (!s.error) { /* keep last until cleared */ }
+  if (s.detection_error) setErr(s.detection_error);
   state.pi = !!s.pi_control;
+}
+
+function syncDetCfg(c) {
+  if (!c) return;
+  const skip = document.activeElement && document.activeElement.id;
+  const set = (id, nid, val, fmt) => {
+    if (val === undefined || val === null) return;
+    if (skip === id) return;
+    $(id).value = val;
+    if (nid) $(nid).textContent = fmt ? fmt(val) : val;
+  };
+  set("detStreak", "detStreakN", c.wrong_streak_n);
+  if (c.confidence_min !== undefined && skip !== "detConf") {
+    $("detConf").value = Math.round(c.confidence_min * 100);
+    $("detConfN").textContent = Number(c.confidence_min).toFixed(2);
+  }
+  set("detCool", "detCoolN", c.cooldown_ms);
+  set("detEvery", "detEveryN", c.process_every_n);
+  set("detJpeg", "detJpegN", c.jpeg_quality);
+  if (skip !== "detSide" && c.pullover_side) $("detSide").value = c.pullover_side;
+  if (skip !== "detAuto") $("detAuto").checked = !!c.auto_pullover_enable;
+  if (skip !== "detPreview") $("detPreview").checked = !!c.preview_enable;
+  if (skip !== "detNoneReset") $("detNoneReset").checked = !!c.none_resets_streak;
+  if (skip !== "detCorrectReset") $("detCorrectReset").checked = !!c.correct_resets_streak;
+  if (skip !== "detDisarmAfter") $("detDisarmAfter").checked = !!c.disarm_after_pullover;
 }
 
 async function api(path, opts={}) {
@@ -591,6 +764,28 @@ $("btnApplyPullCfg").onclick = () => post("/api/pullover/cfg", {
 $("btnReloadPullCfg").onclick = () => post("/api/pullover/cfg/reload");
 $("btnApplyJoyMs").onclick = () => post("/api/joystick/ms", {
   duration_ms: +$("joyMs").value,
+});
+
+$("detStreak").oninput = () => { $("detStreakN").textContent = $("detStreak").value; };
+$("detConf").oninput = () => { $("detConfN").textContent = (+$("detConf").value/100).toFixed(2); };
+$("detCool").oninput = () => { $("detCoolN").textContent = $("detCool").value; };
+$("detEvery").oninput = () => { $("detEveryN").textContent = $("detEvery").value; };
+$("detJpeg").oninput = () => { $("detJpegN").textContent = $("detJpeg").value; };
+
+$("btnDetArm").onclick = () => post("/api/detection/arm");
+$("btnDetDisarm").onclick = () => post("/api/detection/disarm");
+$("btnDetCfg").onclick = () => post("/api/detection/cfg", {
+  wrong_streak_n: +$("detStreak").value,
+  confidence_min: +$("detConf").value / 100,
+  cooldown_ms: +$("detCool").value,
+  process_every_n: +$("detEvery").value,
+  jpeg_quality: +$("detJpeg").value,
+  pullover_side: $("detSide").value,
+  auto_pullover_enable: $("detAuto").checked,
+  preview_enable: $("detPreview").checked,
+  none_resets_streak: $("detNoneReset").checked,
+  correct_resets_streak: $("detCorrectReset").checked,
+  disarm_after_pullover: $("detDisarmAfter").checked,
 });
 
 /* ---- joystick ---- */
@@ -930,30 +1125,89 @@ def api_pullover_cfg_reload():
         return _err(exc)
 
 
+@app.post("/api/detection/arm")
+def api_detection_arm():
+    try:
+        if not _state.get("uart_ready"):
+            # still allow arm if client opens
+            _get_client()
+        _get_detection().arm()
+        _leds.set_armed(True)
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/detection/disarm")
+def api_detection_disarm():
+    try:
+        _get_detection().disarm()
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/detection/cfg")
+def api_detection_cfg():
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        cfg = _get_detection().update_cfg(data)
+        _push_log(f"OK,DETECTION,CFG,streak={cfg['wrong_streak_n']},side={cfg['pullover_side']}")
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.get("/api/detection/mjpeg")
+def api_detection_mjpeg():
+    det = _get_detection()
+
+    def generate():
+        while True:
+            if not det.armed:
+                break
+            cfg = det.get_cfg()
+            if not cfg.get("preview_enable", True):
+                time.sleep(0.2)
+                continue
+            frame = det.get_jpeg()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+            )
+            time.sleep(0.05)
+
+    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
 @app.post("/api/pullover/left")
 @app.post("/api/pullover/right")
 @app.post("/api/pullover/abort")
 def api_pullover():
     global _pi_control
     try:
-        c = _get_client()
-        try:
-            c.sonar_off()
-        except Exception:
-            pass
-        with _lock:
-            _state["sonar_active"] = False
-        _ensure_heartbeat()
-        path = request.path
-        if path.endswith("/left"):
-            # pullover seizes control itself; heartbeat still required
-            msg = c.pullover_left()
-            _pi_control = False
-        elif path.endswith("/right"):
-            msg = c.pullover_right()
-            _pi_control = False
-        else:
-            msg = c.pullover_abort()
+        with _cmd_lock:
+            c = _get_client()
+            try:
+                c.sonar_off()
+            except Exception:
+                pass
+            with _lock:
+                _state["sonar_active"] = False
+            _ensure_heartbeat()
+            path = request.path
+            if path.endswith("/left"):
+                msg = c.pullover_left()
+                _pi_control = False
+            elif path.endswith("/right"):
+                msg = c.pullover_right()
+                _pi_control = False
+            else:
+                msg = c.pullover_abort()
+                _get_detection().set_pullover_busy(False)
         _push_log(msg)
         with _lock:
             _state["error"] = None
@@ -1010,9 +1264,29 @@ def api_manual():
         return _err(exc)
 
 
+def _shutdown(*_args: Any) -> None:
+    try:
+        if _detection is not None:
+            _detection.disarm()
+    except Exception:
+        pass
+    try:
+        _leds.close()
+    except Exception:
+        pass
+
+
 def main() -> None:
+    atexit.register(_shutdown)
+    signal.signal(signal.SIGTERM, lambda *_: (_shutdown(), sys.exit(0)))
+    try:
+        signal.signal(signal.SIGINT, lambda *_: (_shutdown(), sys.exit(0)))
+    except Exception:
+        pass
+
     try:
         _get_client()
+        _set_uart_ready(True)
         _start_status_poller()
         try:
             _reload_pullover_cfg()
@@ -1020,7 +1294,9 @@ def main() -> None:
         except Exception as exc:
             print(f"WARN: PULLOVER,CFG? failed: {exc}", file=sys.stderr)
         print(f"UART open. UI: http://0.0.0.0:{PORT}/")
+        print("LEDs: green=ready yellow=armed red=wrong/pullover")
     except Exception as exc:
+        _set_uart_ready(False)
         print(f"WARN: UART not open yet: {exc}", file=sys.stderr)
     app.run(host=HOST, port=PORT, threaded=True, debug=False)
 

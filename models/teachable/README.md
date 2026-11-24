@@ -1,26 +1,23 @@
-# Teachable Machine model
+# Teachable Machine model (active)
 
-Put the TensorFlow Lite export from
-[Teachable Machine (Image)](https://teachablemachine.withgoogle.com/train/image)
-in this folder.
+Runtime files (used by Flask detection / `live_arrow_tflite.py`):
 
-## Export steps
+- `model.tflite` — **quantized** export (from `archives/tfl quantized android.zip`)
+- `labels.txt` — class names as exported with that model
 
-1. Create three classes named exactly: `correct`, `wrong`, `none`.
-2. Train with photos from the Pi camera view (arrows + empty / glare scenes).
-3. Click **Export Model** → **TensorFlow Lite** → **Download my model**.
-4. Unzip so this directory contains:
-   - `model.tflite`
-   - `labels.txt` (one class name per line)
+## Current classes → app status
 
-## Run on the Pi
+| Model label | App status |
+|-------------|------------|
+| `frwrd`     | correct    |
+| `rvrs`      | wrong      |
+| `Contrl`    | none       |
 
-```bash
-# once: install TFLite into the project venv
-source ~/arrow-env/bin/activate
-pip install tflite-runtime
+Zip archives and the previous float `model.tflite` live under `archives/` (not loaded at runtime).
 
-bash /home/pi/KevinsProject/scripts/run_live_tflite.sh
-```
+## Export / replace
 
-Preview: http://192.168.1.152:8080/
+1. Train in [Teachable Machine](https://teachablemachine.withgoogle.com/train/image).
+2. Export **TensorFlow Lite → Quantized**.
+3. Replace `model.tflite` + `labels.txt` here; update mapping in `src/detection_worker.py` (`normalize_status`) if class names change.
+4. Deploy to the Pi: `~/KevinsProject/models/teachable/`.

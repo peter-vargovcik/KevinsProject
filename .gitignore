@@ -25,3 +25,4 @@ models/teachable/archives/
 scripts/pi/wifi-chooser.env
 *.env
 !scripts/pi/wifi-chooser.env.example
+docs/_guide_diagrams/

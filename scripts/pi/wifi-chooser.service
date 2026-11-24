@@ -1,0 +1,17 @@
+[Unit]
+Description=Kevin Wi-Fi chooser (hotspot preferred, else home; blink red if offline)
+After=NetworkManager.service
+Wants=NetworkManager.service
+Before=sonar-debug.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Environment=PYTHONUNBUFFERED=1
+# Allow forever blink when no AP is available
+TimeoutStartSec=infinity
+ExecStart=/home/pi/arrow-env/bin/python /home/pi/KevinsProject/scripts/pi/wifi_chooser.py
+
+[Install]
+WantedBy=multi-user.target

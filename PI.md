@@ -16,7 +16,8 @@ Full session notes: see [CONTEXT.md](CONTEXT.md).
 | SSH key (laptop) | `%USERPROFILE%\.ssh\id_ed25519_pi` |
 
 Gateway / DNS: `192.168.1.254`  
-Wi‑Fi profile: `eir63498627_5GEXT` (NetworkManager, IPv4 manual)
+Wi‑Fi profile: `eir63498627_5GEXT` (NetworkManager, IPv4 manual)  
+Demo hotspot (preferred on boot): SSID `Galaxy A20eFF3F` — PSK only in `scripts/pi/wifi-chooser.env` on the Pi (gitignored)
 
 ## SSH from this laptop
 

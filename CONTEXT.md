@@ -38,6 +38,7 @@ ECHO via **dual 10 kΩ** divider. VCC=5 V, GND common.
 - [x] Flask **RC test console** on Pi: port **8088** (sonar, pullover + runtime CFG, joystick @ default 25% caps, STOP/RESET); systemd `sonar-debug` + 60s watchdog
 - [x] Pullover tunables over UART: `PULLOVER,CFG?` / `PULLOVER,SET,<KEY>,<val>` (SIDE/BAND/FRONT/CREEP/STEER/STABLE/TIMEOUT)
 - [x] Detection arm in Flask: quantized TFLite, LEDs (G ready / Y armed / R alert), consecutive wrong → auto-pullover, armed-only MJPEG
+- [x] Boot Wi‑Fi chooser: prefer demo hotspot, else home SSID; blink red if offline (`wifi-chooser.service`)
 - [x] USB Serial diag without Pi: send `SONAR,ON` on COM4; see `RANGE3` + `DIAG F= L= R=`
 - [x] Fixed right channel always `-1` (stale timeout + fair round-robin in diag)
 - [x] All three sensors reading on USB bench (F~8, L~40s, R~8–9 cm) after right module replace

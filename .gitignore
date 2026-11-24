@@ -22,3 +22,6 @@ logs/
 *.zip
 models/teachable/*.zip
 models/teachable/archives/
+scripts/pi/wifi-chooser.env
+*.env
+!scripts/pi/wifi-chooser.env.example

@@ -1,6 +1,15 @@
 # Pi commands
 
-Host: `pi@192.168.1.152`  
+Host: `pi@192.168.1.152` (home). On the school hotspot, use the Pi’s DHCP address from the phone’s hotspot client list.
+
+### Boot Wi‑Fi chooser
+
+On boot, `wifi-chooser.service` prefers the demo hotspot SSID, else the home/dev SSID. While offline it **blinks red (GPIO20)**. Config on the Pi only: `scripts/pi/wifi-chooser.env` (from `wifi-chooser.env.example`; **not in git**).
+
+```
+sudo systemctl status wifi-chooser
+sudo journalctl -u wifi-chooser -n 50 --no-pager
+```  
 Project: `/home/pi/KevinsProject`  
 Preview (if streaming): http://192.168.1.152:8080/
 

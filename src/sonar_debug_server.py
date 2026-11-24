@@ -334,12 +334,48 @@ PAGE = r"""<!DOCTYPE html>
   h1 { margin: 0; font-size: 1.45rem; font-weight: 600; letter-spacing: .02em; }
   .sub { color: var(--muted); font-size: .9rem; }
   .shell { padding: 0.75rem 1.25rem 1.5rem; }
+  .status-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem);
+    gap: .75rem;
+    margin-bottom: .75rem;
+    align-items: stretch;
+  }
+  @media (max-width: 900px) {
+    .status-row { grid-template-columns: 1fr; }
+  }
   .status-strip {
     background: var(--panel);
     border: 1px solid var(--line);
     padding: .65rem .9rem;
-    margin-bottom: .75rem;
+    min-width: 0;
   }
+  .status-kv {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: .4rem .9rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .82rem;
+  }
+  @media (max-width: 700px) {
+    .status-kv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  .stat {
+    display: flex; flex-direction: column; gap: .12rem;
+    min-width: 0;
+  }
+  .stat .k { color: var(--muted); font-size: .68rem; letter-spacing: .04em; text-transform: uppercase; }
+  .stat .v { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .quick-actions {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: .65rem .75rem;
+    display: flex; flex-direction: column; gap: .45rem;
+    justify-content: flex-start;
+  }
+  .quick-actions h2 { margin: 0 0 .15rem; }
+  .quick-actions .row { margin-top: 0; }
+  .quick-actions button { width: 100%; text-align: center; }
   .tabs {
     display: flex; flex-wrap: wrap; gap: .35rem;
     border-bottom: 1px solid var(--line);
@@ -457,9 +493,21 @@ PAGE = r"""<!DOCTYPE html>
 </header>
 
 <div class="shell">
-  <div class="status-strip">
-    <div class="kv" id="statusKv"></div>
-    <div class="err" id="err"></div>
+  <div class="status-row">
+    <div class="status-strip">
+      <div class="status-kv" id="statusKv"></div>
+      <div class="err" id="err"></div>
+    </div>
+    <aside class="quick-actions">
+      <h2>Quick actions</h2>
+      <button type="button" id="btnPullL" class="accent">PULLOVER LEFT</button>
+      <button type="button" id="btnPullR" class="accent">PULLOVER RIGHT</button>
+      <button type="button" id="btnPullAbort" class="bad">ABORT</button>
+      <button type="button" id="btnDetArm" class="ok">Arm detection</button>
+      <button type="button" id="btnDetDisarm" class="bad">Disarm</button>
+      <button type="button" id="btnSonarOn" class="ok">Sonar ON</button>
+      <button type="button" id="btnSonarOff" class="bad">Sonar OFF</button>
+    </aside>
   </div>
 
   <nav class="tabs" id="tabBar" role="tablist">
@@ -472,30 +520,14 @@ PAGE = r"""<!DOCTYPE html>
 
   <div class="tab-panel active" id="tab-overview">
     <div class="grid">
-      <section class="panel">
+      <section class="panel full">
         <h2>Sonar</h2>
-        <div class="row">
-          <button type="button" id="btnSonarOn" class="ok">Sonar ON</button>
-          <button type="button" id="btnSonarOff" class="bad">Sonar OFF</button>
-        </div>
-        <div class="meters" style="margin-top:.75rem">
+        <div class="meters">
           <div class="meter"><div class="lab">Front GP14/15</div><div class="val dead" id="v-front">—</div></div>
           <div class="meter"><div class="lab">Left GP8/9</div><div class="val dead" id="v-left">—</div></div>
           <div class="meter"><div class="lab">Right GP16/17</div><div class="val dead" id="v-right">—</div></div>
         </div>
-      </section>
-      <section class="panel">
-        <h2>Quick actions</h2>
-        <div class="row">
-          <button type="button" id="btnPullL" class="accent">PULLOVER LEFT</button>
-          <button type="button" id="btnPullR" class="accent">PULLOVER RIGHT</button>
-          <button type="button" id="btnPullAbort" class="bad">ABORT</button>
-        </div>
-        <div class="row">
-          <button type="button" id="btnDetArm" class="ok">Arm detection</button>
-          <button type="button" id="btnDetDisarm" class="bad">Disarm</button>
-        </div>
-        <p class="hint">Full pullover params and detection tuning are on their tabs. STOP stays in the header.</p>
+        <p class="hint">Pullover / detection tuning live on their tabs. Quick actions stay beside the status strip.</p>
       </section>
     </div>
   </div>
@@ -723,7 +755,9 @@ function render(s) {
     ["pi control", s.pi_control ? "ON" : "OFF"],
     ["uptime", s.uptime_ms + " ms"],
   ];
-  $("statusKv").innerHTML = kv.map(([k,v]) => `<span>${k}</span><span>${v}</span>`).join("");
+  $("statusKv").innerHTML = kv.map(([k,v]) =>
+    `<div class="stat"><span class="k">${k}</span><span class="v">${v}</span></div>`
+  ).join("");
   syncPullSliders(p);
   syncDetCfg(s.detection_cfg);
   const img = $("detPreviewImg");

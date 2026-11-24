@@ -505,29 +505,30 @@ PAGE = r"""<!DOCTYPE html>
       <button type="button" id="btnPullAbort" class="bad">ABORT</button>
       <button type="button" id="btnDetArm" class="ok">Arm detection</button>
       <button type="button" id="btnDetDisarm" class="bad">Disarm</button>
-      <button type="button" id="btnSonarOn" class="ok">Sonar ON</button>
-      <button type="button" id="btnSonarOff" class="bad">Sonar OFF</button>
     </aside>
   </div>
 
   <nav class="tabs" id="tabBar" role="tablist">
-    <button type="button" class="tab active" data-tab="overview">Overview</button>
+    <button type="button" class="tab active" data-tab="sonar">Sonar</button>
     <button type="button" class="tab" data-tab="pullover">Pullover</button>
     <button type="button" class="tab" data-tab="detection">Detection</button>
     <button type="button" class="tab" data-tab="drive">Drive</button>
     <button type="button" class="tab" data-tab="log">Log</button>
   </nav>
 
-  <div class="tab-panel active" id="tab-overview">
+  <div class="tab-panel active" id="tab-sonar">
     <div class="grid">
       <section class="panel full">
         <h2>Sonar</h2>
-        <div class="meters">
+        <div class="row">
+          <button type="button" id="btnSonarOn" class="ok">Sonar ON</button>
+          <button type="button" id="btnSonarOff" class="bad">Sonar OFF</button>
+        </div>
+        <div class="meters" style="margin-top:.75rem">
           <div class="meter"><div class="lab">Front GP14/15</div><div class="val dead" id="v-front">—</div></div>
           <div class="meter"><div class="lab">Left GP8/9</div><div class="val dead" id="v-left">—</div></div>
           <div class="meter"><div class="lab">Right GP16/17</div><div class="val dead" id="v-right">—</div></div>
         </div>
-        <p class="hint">Pullover / detection tuning live on their tabs. Quick actions stay beside the status strip.</p>
       </section>
     </div>
   </div>
@@ -694,7 +695,8 @@ document.querySelectorAll(".tabs .tab").forEach(btn => {
   btn.onclick = () => showTab(btn.dataset.tab);
 });
 try {
-  const saved = localStorage.getItem("rcTab");
+  let saved = localStorage.getItem("rcTab");
+  if (saved === "overview") saved = "sonar";
   if (saved && $("tab-" + saved)) showTab(saved);
 } catch (e) {}
 

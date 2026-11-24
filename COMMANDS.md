@@ -264,7 +264,7 @@ Browser: `http://192.168.1.152:8088/`
 - Armed-only MJPEG preview (`/api/detection/mjpeg`)
 - Virtual joystick (Pi control ON → AUTO + capped DRIVE pulses)
 - Throttle caps default **25%**; joystick pulse ms
-- STOP / RESET / MANUAL
+- STOP / RESET / MANUAL / **Power off Pi** (confirm → `sudo shutdown -h now`)
 
 **LEDs (owned by `sonar-debug`):** green GPIO21 = ready (UART+UI), yellow GPIO16 = detection armed, red GPIO20 = wrong streak / pullover. Do not run `live_arrow_*` at the same time (GPIO busy).
 

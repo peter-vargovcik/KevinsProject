@@ -10,6 +10,12 @@ sudo cp "$ROOT/scripts/pi/sonar-debug-watchdog.timer" "$UNIT_DIR/sonar-debug-wat
 sudo chmod +x "$ROOT/scripts/pi/sonar-debug-watchdog.sh"
 sudo chmod +x "$ROOT/scripts/pi/install_sonar_debug_service.sh"
 
+# Passwordless halt for Flask "Power off Pi" button
+SUDOERS_DST=/etc/sudoers.d/sonar-debug-shutdown
+sudo cp "$ROOT/scripts/pi/sonar-debug-shutdown.sudoers" "$SUDOERS_DST"
+sudo chmod 440 "$SUDOERS_DST"
+sudo visudo -cf "$SUDOERS_DST"
+
 # Stop any manual nohup instance
 if [ -f /home/pi/KevinsProject/logs/sonar_debug.pid ]; then
   kill "$(cat /home/pi/KevinsProject/logs/sonar_debug.pid)" 2>/dev/null || true

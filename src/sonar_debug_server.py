@@ -20,6 +20,7 @@ import atexit
 import json
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -489,6 +490,7 @@ PAGE = r"""<!DOCTYPE html>
     <button type="button" id="btnStop" class="bad">STOP</button>
     <button type="button" id="btnReset">RESET</button>
     <button type="button" id="btnManual">MANUAL</button>
+    <button type="button" id="btnPowerOff" class="bad">Power off Pi</button>
   </div>
 </header>
 
@@ -845,6 +847,18 @@ $("btnStop").onclick = () => post("/api/stop");
 $("btnReset").onclick = () => post("/api/reset");
 $("btnManual").onclick = () => post("/api/manual");
 $("btnRefresh").onclick = () => post("/api/status");
+$("btnPowerOff").onclick = async () => {
+  if (!confirm("Shut down the Raspberry Pi now? You will need physical power/SSH access to bring it back.")) {
+    return;
+  }
+  try {
+    setErr("");
+    await post("/api/poweroff");
+    setErr("Pi shutting down…");
+  } catch (e) {
+    setErr(e.message);
+  }
+};
 $("btnPiOn").onclick = () => post("/api/pi/on");
 $("btnPiOff").onclick = () => post("/api/pi/off");
 const detArm = () => post("/api/detection/arm");
@@ -1336,6 +1350,33 @@ def api_pullover():
             _state["error"] = None
             _state["pi_control"] = _pi_control
         return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/poweroff")
+def api_poweroff():
+    """Halt the Raspberry Pi (requires passwordless sudo for /sbin/shutdown)."""
+    try:
+        try:
+            _get_detection().disarm()
+        except Exception:
+            pass
+        _leds.all_off()
+        _push_log("OK,POWEROFF")
+        # -n: fail instead of prompting; needs scripts/pi/sonar-debug-shutdown.sudoers
+        proc = subprocess.run(
+            ["sudo", "-n", "/sbin/shutdown", "-h", "now"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "shutdown failed").strip()
+            raise RuntimeError(
+                f"{err} — install sudoers via bash scripts/pi/install_sonar_debug_service.sh"
+            )
+        return jsonify({"ok": True, "message": "shutdown requested"})
     except Exception as exc:
         return _err(exc)
 

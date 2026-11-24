@@ -2,6 +2,8 @@
 
 Host: `pi@192.168.1.152` (home) · `pi@172.31.42.139` (Galaxy hotspot, fixed)
 
+Student PDF guide (diagrams + dashboard + connection): [docs/Student_Project_Guide.pdf](docs/Student_Project_Guide.pdf) — regenerate with `python scripts/generate_student_guide_pdf.py`.
+
 ### Boot Wi‑Fi chooser
 
 On boot, `wifi-chooser.service` prefers the demo hotspot SSID, else the home/dev SSID. While offline it **blinks red (GPIO20)**. Config on the Pi only: `scripts/pi/wifi-chooser.env` (from `wifi-chooser.env.example`; **not in git**).

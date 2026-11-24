@@ -1,6 +1,6 @@
 # Pi commands
 
-Host: `pi@192.168.1.152` (home). On the school hotspot, use the Pi’s DHCP address from the phone’s hotspot client list.
+Host: `pi@192.168.1.152` (home) · `pi@172.31.42.139` (Galaxy hotspot, fixed)
 
 ### Boot Wi‑Fi chooser
 

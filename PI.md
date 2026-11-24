@@ -17,7 +17,8 @@ Full session notes: see [CONTEXT.md](CONTEXT.md).
 
 Gateway / DNS: `192.168.1.254`  
 Wi‑Fi profile: `eir63498627_5GEXT` (NetworkManager, IPv4 manual)  
-Demo hotspot (preferred on boot): SSID `Galaxy A20eFF3F` — PSK only in `scripts/pi/wifi-chooser.env` on the Pi (gitignored)
+Demo hotspot (preferred on boot): SSID `Galaxy A20eFF3F` — PSK only in `scripts/pi/wifi-chooser.env` on the Pi (gitignored)  
+Hotspot fixed IP: **`172.31.42.139`** (gateway `172.31.42.38`) — dashboard http://172.31.42.139:8088/
 
 ## SSH from this laptop
 

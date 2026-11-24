@@ -398,6 +398,64 @@ class Rp2040Client:
             raise RuntimeError(line)
         return line
 
+    def override_on(self, timeout_s: Optional[float] = None) -> str:
+        self.send_raw("OVERRIDE,ON")
+        return self.wait_line(prefix="OK,OVERRIDE,ON", timeout_s=timeout_s)
+
+    def override_off(self, timeout_s: Optional[float] = None) -> str:
+        self.send_raw("OVERRIDE,OFF")
+        line = self.wait_line(
+            prefixes=("OK,OVERRIDE,OFF", "ERR,"), timeout_s=timeout_s
+        )
+        if line.startswith("ERR,"):
+            raise RuntimeError(line)
+        return line
+
+    def override_arm(self, timeout_s: Optional[float] = None) -> str:
+        self.send_raw("OVERRIDE,ARM")
+        line = self.wait_line(
+            prefixes=("OK,OVERRIDE,ARM", "ERR,"), timeout_s=timeout_s
+        )
+        if line.startswith("ERR,"):
+            raise RuntimeError(line)
+        return line
+
+    def override_steer(self, angle: int, timeout_s: Optional[float] = None) -> str:
+        if not -100 <= angle <= 100:
+            raise ValueError("angle must be -100..100")
+        self.send_raw(f"OVERRIDE,STEER,{angle}")
+        line = self.wait_line(
+            prefixes=("OK,OVERRIDE,STEER", "ERR,"), timeout_s=timeout_s
+        )
+        if line.startswith("ERR,"):
+            raise RuntimeError(line)
+        return line
+
+    def override_drive(
+        self,
+        direction: int,
+        angle: int,
+        duration_ms: int,
+        timeout_s: Optional[float] = None,
+    ) -> str:
+        if direction not in (1, 2):
+            raise ValueError("direction must be 1 or 2")
+        if not -100 <= angle <= 100:
+            raise ValueError("angle must be -100..100")
+        if not 1 <= duration_ms <= 1500:
+            raise ValueError("duration_ms must be 1..1500")
+        self.send_raw(f"OVERRIDE,DRIVE,{direction},{angle},{duration_ms}")
+        line = self.wait_line(
+            prefixes=("OK,OVERRIDE,DRIVE", "ERR,"), timeout_s=timeout_s
+        )
+        if line.startswith("ERR,"):
+            raise RuntimeError(line)
+        return line
+
+    def estop(self, timeout_s: Optional[float] = None) -> str:
+        self.send_raw("ESTOP")
+        return self.wait_line(prefix="OK,ESTOP", timeout_s=timeout_s)
+
     # ---- heartbeat ---------------------------------------------------------
 
     def start_heartbeat(self, interval_s: float = HEARTBEAT_INTERVAL_S) -> None:

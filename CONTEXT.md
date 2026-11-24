@@ -35,7 +35,7 @@ ECHO via **dual 10 kΩ** divider. VCC=5 V, GND common.
 - [x] PULLOVER LEFT/RIGHT with Pi takeover (sticks need not be centered)
 - [x] Front collision path exists (`ERR,PULLOVER,FRONT` if front &lt; 25 cm)
 - [x] Sonar debug: `SONAR,ON` / `OFF` / `?` → `RANGE3,f,l,r`
-- [x] Flask UI on Pi: port **8088**, systemd `sonar-debug` + 60s watchdog (`scripts/pi/`)
+- [x] Flask **RC test console** on Pi: port **8088** (sonar, pullover, joystick @ default 25% caps, STOP/RESET); systemd `sonar-debug` + 60s watchdog
 - [x] USB Serial diag without Pi: send `SONAR,ON` on COM4; see `RANGE3` + `DIAG F= L= R=`
 - [x] Fixed right channel always `-1` (stale timeout + fair round-robin in diag)
 - [x] All three sensors reading on USB bench (F~8, L~40s, R~8–9 cm) after right module replace

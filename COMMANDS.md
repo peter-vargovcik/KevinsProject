@@ -253,11 +253,15 @@ python src/test_pullover.py right
 python src/test_pullover.py left
 ```
 
-### Sonar debug UI (Flask)
+### RC test console (Flask Wi‑Fi UI)
 
-Live front / left / right distances (`SONAR,ON` → `RANGE3,f,l,r`). No driving.
+Browser: `http://192.168.1.152:8088/`
 
-Browser: `http://192.168.1.152:8088/` → **Sonar ON** / **OFF**.
+- Live STATUS + sonar gauges (`SONAR,ON` / `OFF`)
+- Pull-over LEFT / RIGHT / ABORT
+- Virtual joystick (Pi control ON → AUTO + capped DRIVE pulses)
+- Throttle caps default **25%** (sliders 0–100, Apply caps)
+- STOP / RESET / MANUAL
 
 **Start on boot** (systemd + 60 s health watchdog):
 
@@ -268,13 +272,10 @@ sudo systemctl status sonar-debug
 curl -s http://127.0.0.1:8088/api/health
 ```
 
-Manual run (if not using systemd):
+After updating the UI script on the Pi:
 
 ```
-cd ~/KevinsProject
-source ~/arrow-env/bin/activate
-pip install flask
-python src/sonar_debug_server.py
+sudo systemctl restart sonar-debug
 ```
 
 CLI one-shot (3 s): firmware also accepts `SONAR?`. Continuous: `SONAR,ON` / `SONAR,OFF`.

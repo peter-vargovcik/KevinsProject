@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Flask HTML5 UI for live HC-SR04 distances (RP2040 SONAR,ON).
+"""Comprehensive RP2040 test UI over Wi‑Fi (Flask on the Pi).
 
-Runs on the Pi (UART to RP2040). Open from a laptop browser:
+Features:
+  - Live STATUS + sonar RANGE3
+  - Sonar ON/OFF
+  - Pull-over LEFT / RIGHT / ABORT
+  - Virtual joystick (MODE,AUTO + CAP + DRIVE pulses)
+  - Throttle caps default 25% (user-adjustable 0–100)
+  - STOP / RESET / MANUAL
+
   http://<pi-ip>:8088/
-
-Usage:
-  cd ~/KevinsProject
-  source ~/arrow-env/bin/activate
-  pip install flask
-  python src/sonar_debug_server.py
 """
 
 from __future__ import annotations
@@ -18,52 +19,128 @@ import os
 import sys
 import threading
 import time
-from typing import Any, Optional
+from collections import deque
+from typing import Any, Deque, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, Response, jsonify, render_template_string
+from flask import Flask, Response, jsonify, render_template_string, request
 
-from rp2040_uart import Rp2040Client  # noqa: E402
+from rp2040_uart import Rp2040Client, parse_status  # noqa: E402
 
 HOST = "0.0.0.0"
 PORT = 8088
+DEFAULT_CAP = 25
+JOYSTICK_DRIVE_MS = 280
+LOG_MAX = 80
 
 _lock = threading.Lock()
 _state: dict[str, Any] = {
     "front": -1,
     "left": -1,
     "right": -1,
-    "active": False,
+    "sonar_active": False,
     "updated_ms": 0,
     "error": None,
     "raw": "",
+    "mode": "?",
+    "armed": False,
+    "rc_ok": False,
+    "steer_in": 0,
+    "thr_in": 0,
+    "steer_out": 0,
+    "thr_out": 0,
+    "forward_cap": DEFAULT_CAP,
+    "reverse_cap": DEFAULT_CAP,
+    "drive_active": False,
+    "uptime_ms": 0,
+    "pi_control": False,
+    "last_event": "",
+    "log": [],
 }
+_log: Deque[str] = deque(maxlen=LOG_MAX)
 _client: Optional[Rp2040Client] = None
 _client_lock = threading.Lock()
+_pi_control = False
+_hb_started = False
+_status_thread: Optional[threading.Thread] = None
+_status_stop = threading.Event()
+
+
+def _push_log(msg: str) -> None:
+    ts = time.strftime("%H:%M:%S")
+    entry = f"{ts} {msg}"
+    _log.appendleft(entry)
+    with _lock:
+        _state["last_event"] = msg
+        _state["log"] = list(_log)
 
 
 def _on_line(line: str) -> None:
-    if not line.startswith("RANGE3,"):
-        return
-    parts = line.strip().split(",")
-    if len(parts) < 4:
-        return
-    try:
-        front, left, right = int(parts[1]), int(parts[2]), int(parts[3])
-    except ValueError:
+    line = line.strip()
+    if not line:
         return
     with _lock:
-        _state["front"] = front
-        _state["left"] = left
-        _state["right"] = right
+        _state["raw"] = line
         _state["updated_ms"] = int(time.time() * 1000)
-        _state["raw"] = line.strip()
-        _state["error"] = None
+
+    if line.startswith("RANGE3,"):
+        parts = line.split(",")
+        if len(parts) >= 4:
+            try:
+                f, l, r = int(parts[1]), int(parts[2]), int(parts[3])
+            except ValueError:
+                return
+            with _lock:
+                _state["front"] = f
+                _state["left"] = l
+                _state["right"] = r
+                _state["error"] = None
+        return
+
+    if line.startswith("RANGE,"):
+        # pullover: RANGE,front,side
+        parts = line.split(",")
+        if len(parts) >= 3:
+            try:
+                f, s = int(parts[1]), int(parts[2])
+            except ValueError:
+                return
+            with _lock:
+                _state["front"] = f
+                # side channel mirrors active manoeuvre; show on both gauges
+                _state["left"] = s
+                _state["right"] = s
+        _push_log(line)
+        return
+
+    if line.startswith("STATUS,"):
+        try:
+            st = parse_status(line)
+        except ValueError:
+            return
+        with _lock:
+            _state["mode"] = st.mode
+            _state["armed"] = st.armed
+            _state["rc_ok"] = st.rc_ok
+            _state["steer_in"] = st.rc_steer
+            _state["thr_in"] = st.rc_throttle
+            _state["steer_out"] = st.steer_out
+            _state["thr_out"] = st.throttle_out
+            _state["forward_cap"] = st.forward_cap
+            _state["reverse_cap"] = st.reverse_cap
+            _state["drive_active"] = st.drive_active
+            _state["uptime_ms"] = st.uptime_ms
+        return
+
+    if line.startswith(
+        ("DONE,", "ERR,", "OK,PULLOVER", "OK,SONAR", "OK,DRIVE", "OK,AUTO", "OK,MANUAL", "OK,STOP", "OK,RESET")
+    ):
+        _push_log(line)
 
 
 def _get_client() -> Rp2040Client:
-    global _client
+    global _client, _hb_started
     with _client_lock:
         if _client is None:
             _client = Rp2040Client(on_line=_on_line, timeout_s=2.0)
@@ -71,27 +148,57 @@ def _get_client() -> Rp2040Client:
         return _client
 
 
+def _ensure_heartbeat() -> None:
+    global _hb_started
+    c = _get_client()
+    if not _hb_started:
+        c.start_heartbeat(0.1)
+        _hb_started = True
+
+
 def _snapshot() -> dict[str, Any]:
     with _lock:
-        return dict(_state)
+        snap = dict(_state)
+        snap["pi_control"] = _pi_control
+        snap["log"] = list(_log)
+        return snap
+
+
+def _status_loop() -> None:
+    while not _status_stop.wait(0.5):
+        try:
+            c = _get_client()
+            c.status()
+        except Exception:
+            pass
+
+
+def _start_status_poller() -> None:
+    global _status_thread
+    if _status_thread and _status_thread.is_alive():
+        return
+    _status_stop.clear()
+    _status_thread = threading.Thread(target=_status_loop, name="status-poll", daemon=True)
+    _status_thread.start()
 
 
 PAGE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Sonar debug</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+<title>RC test console</title>
 <style>
   :root {
-    --bg: #0e1114;
-    --panel: #171b20;
-    --ink: #e8ecef;
+    --bg: #0c0f12;
+    --panel: #151a1f;
+    --ink: #e7ecef;
     --muted: #8b959e;
     --ok: #3dbe7f;
     --bad: #d4574a;
     --accent: #c4a35a;
     --line: #2a3138;
+    --joy: #1c242c;
   }
   * { box-sizing: border-box; }
   body {
@@ -99,180 +206,330 @@ PAGE = r"""<!DOCTYPE html>
     min-height: 100vh;
     font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
     background:
-      radial-gradient(1200px 600px at 10% -10%, #1a2229 0%, transparent 55%),
-      radial-gradient(900px 500px at 100% 0%, #1c1810 0%, transparent 50%),
+      radial-gradient(900px 500px at 0% 0%, #1a2229 0%, transparent 55%),
+      radial-gradient(700px 400px at 100% 10%, #1c1810 0%, transparent 45%),
       var(--bg);
     color: var(--ink);
   }
   header {
-    padding: 1.25rem 1.5rem 0.5rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    align-items: baseline;
-    justify-content: space-between;
+    padding: 1rem 1.25rem;
+    display: flex; flex-wrap: wrap; gap: .75rem 1.25rem;
+    align-items: baseline; justify-content: space-between;
+    border-bottom: 1px solid var(--line);
   }
-  h1 {
-    margin: 0;
-    font-size: clamp(1.4rem, 3vw, 2rem);
-    font-weight: 600;
-    letter-spacing: 0.02em;
-  }
-  .sub { color: var(--muted); font-size: 0.95rem; }
-  .controls { display: flex; gap: 0.6rem; flex-wrap: wrap; }
-  button {
-    appearance: none;
-    border: 1px solid var(--line);
-    background: var(--panel);
-    color: var(--ink);
-    padding: 0.65rem 1.1rem;
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
-  }
-  button:hover { border-color: var(--accent); }
-  button.on { background: #1e2a22; border-color: var(--ok); color: var(--ok); }
-  button.off { background: #2a1c1b; border-color: var(--bad); color: #f0a39c; }
-  main {
-    padding: 1rem 1.5rem 2rem;
+  h1 { margin: 0; font-size: 1.45rem; font-weight: 600; letter-spacing: .02em; }
+  .sub { color: var(--muted); font-size: .9rem; }
+  .grid {
     display: grid;
     gap: 1rem;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 1rem 1.25rem 1.5rem;
+    grid-template-columns: 1.1fr 1fr;
   }
-  @media (max-width: 800px) {
-    main { grid-template-columns: 1fr; }
-  }
-  .card {
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+  .panel {
     background: var(--panel);
     border: 1px solid var(--line);
-    padding: 1.25rem 1.35rem 1.5rem;
-    min-height: 11rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
+    padding: 1rem 1.1rem 1.15rem;
   }
-  .label {
+  .panel h2 {
+    margin: 0 0 .75rem;
+    font-size: .72rem;
     text-transform: uppercase;
-    letter-spacing: 0.14em;
-    font-size: 0.75rem;
+    letter-spacing: .14em;
     color: var(--muted);
+    font-weight: 600;
   }
-  .pin { font-size: 0.8rem; color: var(--muted); }
-  .value {
+  .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  .row + .row { margin-top: .65rem; }
+  button, .btn {
+    appearance: none; border: 1px solid var(--line); background: #12171c;
+    color: var(--ink); padding: .55rem .9rem; font: inherit; font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.ok { border-color: #2f6b4a; color: var(--ok); }
+  button.bad { border-color: #7a3530; color: #f0a39c; }
+  button.accent { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .meters {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem;
+  }
+  .meter { background: #10151a; border: 1px solid var(--line); padding: .7rem .75rem; }
+  .meter .lab { font-size: .68rem; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .meter .val {
     font-family: "IBM Plex Mono", ui-monospace, monospace;
-    font-size: clamp(2.8rem, 8vw, 4.2rem);
-    font-weight: 500;
-    line-height: 1.05;
-    margin-top: auto;
+    font-size: 1.65rem; margin-top: .2rem;
   }
-  .value.dead { color: var(--bad); }
-  .value.live { color: var(--ok); }
-  .bar {
-    height: 4px;
-    background: #22282e;
-    margin-top: 0.75rem;
-    overflow: hidden;
+  .meter .val.live { color: var(--ok); }
+  .meter .val.dead { color: var(--bad); }
+  .kv {
+    display: grid; grid-template-columns: auto 1fr; gap: .25rem .75rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .82rem;
   }
-  .bar > span {
-    display: block;
-    height: 100%;
-    width: 0%;
-    background: var(--accent);
-    transition: width 0.15s linear;
+  .kv span:nth-child(odd) { color: var(--muted); }
+  label.cap {
+    display: flex; flex-direction: column; gap: .25rem; min-width: 9rem; flex: 1;
+    font-size: .8rem; color: var(--muted);
   }
-  footer {
-    padding: 0 1.5rem 1.5rem;
-    color: var(--muted);
-    font-family: "IBM Plex Mono", ui-monospace, monospace;
-    font-size: 0.8rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
+  input[type=range] { width: 100%; }
+  .capnum { color: var(--ink); font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  #stickWrap {
+    position: relative; width: min(280px, 100%); aspect-ratio: 1;
+    margin: .5rem auto 0; background: var(--joy); border: 1px solid var(--line);
+    touch-action: none; user-select: none;
   }
-  .err { color: var(--bad); }
+  #stickBase {
+    position: absolute; inset: 12%; border: 1px dashed #33404a; border-radius: 50%;
+  }
+  #stickKnob {
+    position: absolute; width: 56px; height: 56px; margin: -28px 0 0 -28px;
+    left: 50%; top: 50%; border-radius: 50%;
+    background: #2a3540; border: 2px solid var(--accent);
+    box-shadow: 0 0 0 1px #0008;
+  }
+  .joyread {
+    text-align: center; margin-top: .55rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .85rem; color: var(--muted);
+  }
+  #log {
+    height: 9.5rem; overflow: auto; margin: 0;
+    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .72rem;
+    background: #0e1317; border: 1px solid var(--line); padding: .5rem .65rem;
+    color: #b7c0c7; white-space: pre-wrap;
+  }
+  .err { color: var(--bad); min-height: 1.2em; margin-top: .5rem; font-size: .85rem; }
+  .hint { color: var(--muted); font-size: .8rem; margin-top: .45rem; line-height: 1.35; }
 </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>Sonar debug</h1>
-      <div class="sub">RP2040 HC-SR04 · live RANGE3 over UART</div>
+<header>
+  <div>
+    <h1>RC test console</h1>
+    <div class="sub">Pi ↔ RP2040 · Wi‑Fi bench · default throttle cap 25%</div>
+  </div>
+  <div class="row">
+    <button type="button" id="btnRefresh" class="accent">Refresh STATUS</button>
+    <button type="button" id="btnStop" class="bad">STOP</button>
+    <button type="button" id="btnReset">RESET</button>
+    <button type="button" id="btnManual">MANUAL</button>
+  </div>
+</header>
+
+<div class="grid">
+  <section class="panel">
+    <h2>Status</h2>
+    <div class="kv" id="statusKv"></div>
+    <div class="err" id="err"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Sonar</h2>
+    <div class="row">
+      <button type="button" id="btnSonarOn" class="ok">Sonar ON</button>
+      <button type="button" id="btnSonarOff" class="bad">Sonar OFF</button>
     </div>
-    <div class="controls">
-      <button id="btnOn" class="on" type="button">Sonar ON</button>
-      <button id="btnOff" class="off" type="button">Sonar OFF</button>
+    <div class="meters" style="margin-top:.75rem">
+      <div class="meter"><div class="lab">Front GP14/15</div><div class="val dead" id="v-front">—</div></div>
+      <div class="meter"><div class="lab">Left GP8/9</div><div class="val dead" id="v-left">—</div></div>
+      <div class="meter"><div class="lab">Right GP16/17</div><div class="val dead" id="v-right">—</div></div>
     </div>
-  </header>
-  <main>
-    <section class="card" data-key="front">
-      <div class="label">Front</div>
-      <div class="pin">TRIG GP14 · ECHO GP15</div>
-      <div class="value dead" id="v-front">—</div>
-      <div class="bar"><span id="b-front"></span></div>
-    </section>
-    <section class="card" data-key="left">
-      <div class="label">Left</div>
-      <div class="pin">TRIG GP8 · ECHO GP9</div>
-      <div class="value dead" id="v-left">—</div>
-      <div class="bar"><span id="b-left"></span></div>
-    </section>
-    <section class="card" data-key="right">
-      <div class="label">Right</div>
-      <div class="pin">TRIG GP16 · ECHO GP17</div>
-      <div class="value dead" id="v-right">—</div>
-      <div class="bar"><span id="b-right"></span></div>
-    </section>
-  </main>
-  <footer>
-    <span id="status">idle</span>
-    <span id="raw"></span>
-    <span id="err" class="err"></span>
-  </footer>
+  </section>
+
+  <section class="panel">
+    <h2>Pull-over</h2>
+    <div class="row">
+      <button type="button" id="btnPullL" class="accent">PULLOVER LEFT</button>
+      <button type="button" id="btnPullR" class="accent">PULLOVER RIGHT</button>
+      <button type="button" id="btnPullAbort" class="bad">ABORT</button>
+    </div>
+    <p class="hint">Takes over even if TX sticks are not centered. Uses front + side sonar. Keep clear / wheels lifted for first runs.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Virtual joystick</h2>
+    <div class="row">
+      <button type="button" id="btnPiOn" class="ok">Pi control ON</button>
+      <button type="button" id="btnPiOff" class="bad">Pi control OFF</button>
+    </div>
+    <div class="row">
+      <label class="cap">Forward cap
+        <input type="range" id="capFwd" min="0" max="100" value="25"/>
+        <span class="capnum"><span id="capFwdN">25</span>%</span>
+      </label>
+      <label class="cap">Reverse cap
+        <input type="range" id="capRev" min="0" max="100" value="25"/>
+        <span class="capnum"><span id="capRevN">25</span>%</span>
+      </label>
+    </div>
+    <div class="row">
+      <button type="button" id="btnApplyCaps" class="accent">Apply caps</button>
+    </div>
+    <div id="stickWrap"><div id="stickBase"></div><div id="stickKnob"></div></div>
+    <div class="joyread" id="joyRead">steer 0 · thr 0 · idle</div>
+    <p class="hint">Engage Pi control first. Stick sends capped DRIVE pulses (AUTO). Release stick to coast to stop (~0.3 s).</p>
+  </section>
+
+  <section class="panel" style="grid-column: 1 / -1">
+    <h2>Event log</h2>
+    <pre id="log"></pre>
+  </section>
+</div>
+
 <script>
-const MAX_CM = 200;
-function fmt(cm) {
+const state = { pi: false, steer: 0, thr: 0, dragging: false, driveTimer: null };
+
+function $(id) { return document.getElementById(id); }
+function setErr(msg) { $("err").textContent = msg || ""; }
+
+function fmtCm(cm) {
   if (cm === null || cm === undefined || cm < 0) return "—";
   return cm + " cm";
 }
-function setSensor(key, cm) {
-  const el = document.getElementById("v-" + key);
-  const bar = document.getElementById("b-" + key);
-  el.textContent = fmt(cm);
+function setMeter(id, cm) {
+  const el = $(id);
+  el.textContent = fmtCm(cm);
   const live = typeof cm === "number" && cm > 0;
   el.classList.toggle("live", live);
   el.classList.toggle("dead", !live);
-  const pct = live ? Math.max(2, Math.min(100, (cm / MAX_CM) * 100)) : 0;
-  bar.style.width = pct + "%";
 }
-function apply(data) {
-  setSensor("front", data.front);
-  setSensor("left", data.left);
-  setSensor("right", data.right);
-  document.getElementById("status").textContent =
-    (data.active ? "streaming" : "idle") +
-    (data.updated_ms ? " · " + new Date(data.updated_ms).toLocaleTimeString() : "");
-  document.getElementById("raw").textContent = data.raw || "";
-  document.getElementById("err").textContent = data.error || "";
+
+function render(s) {
+  setMeter("v-front", s.front);
+  setMeter("v-left", s.left);
+  setMeter("v-right", s.right);
+  const kv = [
+    ["mode", s.mode],
+    ["armed", s.armed ? "1" : "0"],
+    ["rcOK", s.rc_ok ? "1" : "0"],
+    ["steer in/out", `${s.steer_in}/${s.steer_out}`],
+    ["thr in/out", `${s.thr_in}/${s.thr_out}`],
+    ["caps F/R", `${s.forward_cap}% / ${s.reverse_cap}%`],
+    ["drive", s.drive_active ? "1" : "0"],
+    ["sonar", s.sonar_active ? "ON" : "OFF"],
+    ["pi control", s.pi_control ? "ON" : "OFF"],
+    ["uptime", s.uptime_ms + " ms"],
+  ];
+  $("statusKv").innerHTML = kv.map(([k,v]) => `<span>${k}</span><span>${v}</span>`).join("");
+  if (s.log && s.log.length) $("log").textContent = s.log.join("\n");
+  if (s.error) setErr(s.error); else if (!s.error) { /* keep last until cleared */ }
+  state.pi = !!s.pi_control;
 }
-async function post(path) {
-  const r = await fetch(path, { method: "POST" });
-  const data = await r.json();
-  if (!r.ok) throw new Error(data.error || r.statusText);
-  apply(data);
+
+async function api(path, opts={}) {
+  const r = await fetch(path, {
+    method: opts.method || "GET",
+    headers: opts.body ? {"Content-Type": "application/json"} : undefined,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || data.message || r.statusText);
+  render(data);
+  return data;
 }
-document.getElementById("btnOn").onclick = () =>
-  post("/api/sonar/on").catch(e => { document.getElementById("err").textContent = e.message; });
-document.getElementById("btnOff").onclick = () =>
-  post("/api/sonar/off").catch(e => { document.getElementById("err").textContent = e.message; });
+
+async function post(path, body) {
+  try {
+    setErr("");
+    return await api(path, { method: "POST", body: body || {} });
+  } catch (e) {
+    setErr(e.message);
+    throw e;
+  }
+}
+
+$("btnSonarOn").onclick = () => post("/api/sonar/on");
+$("btnSonarOff").onclick = () => post("/api/sonar/off");
+$("btnPullL").onclick = () => post("/api/pullover/left");
+$("btnPullR").onclick = () => post("/api/pullover/right");
+$("btnPullAbort").onclick = () => post("/api/pullover/abort");
+$("btnStop").onclick = () => post("/api/stop");
+$("btnReset").onclick = () => post("/api/reset");
+$("btnManual").onclick = () => post("/api/manual");
+$("btnRefresh").onclick = () => post("/api/status");
+$("btnPiOn").onclick = () => post("/api/pi/on");
+$("btnPiOff").onclick = () => post("/api/pi/off");
+
+function syncCapLabels() {
+  $("capFwdN").textContent = $("capFwd").value;
+  $("capRevN").textContent = $("capRev").value;
+}
+$("capFwd").oninput = syncCapLabels;
+$("capRev").oninput = syncCapLabels;
+$("btnApplyCaps").onclick = () => post("/api/caps", {
+  forward: +$("capFwd").value,
+  reverse: +$("capRev").value,
+});
+
+/* ---- joystick ---- */
+const wrap = $("stickWrap");
+const knob = $("stickKnob");
+function joyNorm(clientX, clientY) {
+  const r = wrap.getBoundingClientRect();
+  const cx = r.left + r.width/2, cy = r.top + r.height/2;
+  const max = Math.min(r.width, r.height) * 0.38;
+  let dx = clientX - cx, dy = clientY - cy;
+  const mag = Math.hypot(dx, dy) || 1;
+  if (mag > max) { dx = dx/mag*max; dy = dy/mag*max; }
+  knob.style.left = (50 + (dx/r.width)*100) + "%";
+  knob.style.top = (50 + (dy/r.height)*100) + "%";
+  // x: steer -100..100, y: throttle +forward / -reverse (screen y down)
+  const steer = Math.round((dx/max) * 100);
+  const thr = Math.round((-dy/max) * 100);
+  state.steer = Math.max(-100, Math.min(100, steer));
+  state.thr = Math.max(-100, Math.min(100, thr));
+  $("joyRead").textContent = `steer ${state.steer} · thr ${state.thr}` + (state.pi ? " · driving" : " · engage Pi control");
+}
+function joyReset() {
+  knob.style.left = "50%"; knob.style.top = "50%";
+  state.steer = 0; state.thr = 0; state.dragging = false;
+  $("joyRead").textContent = "steer 0 · thr 0 · idle";
+  stopDriveLoop();
+}
+function startDriveLoop() {
+  stopDriveLoop();
+  const tick = async () => {
+    if (!state.pi) return;
+    if (Math.abs(state.steer) < 8 && Math.abs(state.thr) < 8) return;
+    try {
+      await api("/api/drive", {
+        method: "POST",
+        body: { steer: state.steer, throttle: state.thr, duration_ms: 280 },
+      });
+    } catch (e) { setErr(e.message); }
+  };
+  state.driveTimer = setInterval(tick, 150);
+  tick();
+}
+function stopDriveLoop() {
+  if (state.driveTimer) { clearInterval(state.driveTimer); state.driveTimer = null; }
+}
+function onDown(ev) {
+  state.dragging = true;
+  const t = ev.touches ? ev.touches[0] : ev;
+  joyNorm(t.clientX, t.clientY);
+  if (state.pi) startDriveLoop();
+  ev.preventDefault();
+}
+function onMove(ev) {
+  if (!state.dragging) return;
+  const t = ev.touches ? ev.touches[0] : ev;
+  joyNorm(t.clientX, t.clientY);
+  ev.preventDefault();
+}
+function onUp() { joyReset(); }
+wrap.addEventListener("mousedown", onDown);
+window.addEventListener("mousemove", onMove);
+window.addEventListener("mouseup", onUp);
+wrap.addEventListener("touchstart", onDown, {passive:false});
+wrap.addEventListener("touchmove", onMove, {passive:false});
+wrap.addEventListener("touchend", onUp);
 
 const es = new EventSource("/api/stream");
-es.onmessage = (ev) => {
-  try { apply(JSON.parse(ev.data)); } catch (_) {}
-};
-es.onerror = () => {
-  document.getElementById("status").textContent = "stream reconnecting…";
-};
+es.onmessage = (ev) => { try { render(JSON.parse(ev.data)); } catch(_){} };
+es.onerror = () => { $("joyRead").textContent = "stream reconnecting…"; };
+
+post("/api/status").catch(() => {});
+syncCapLabels();
 </script>
 </body>
 </html>
@@ -281,62 +538,33 @@ es.onerror = () => {
 app = Flask(__name__)
 
 
+def _err(exc: Exception, code: int = 500):
+    with _lock:
+        _state["error"] = str(exc)
+    body = _snapshot()
+    body["error"] = str(exc)
+    return jsonify(body), code
+
+
 @app.get("/")
 def index():
     return render_template_string(PAGE)
 
 
-@app.get("/api/state")
-def api_state():
-    return jsonify(_snapshot())
-
-
 @app.get("/api/health")
 def api_health():
-    """Liveness for systemd / curl watchdog (UART optional)."""
     uart_ok = False
     with _client_lock:
         uart_ok = _client is not None and _client._ser is not None and _client._ser.is_open
-    body = {"ok": True, "uart": uart_ok, "port": PORT}
-    return jsonify(body), 200
+    return jsonify({"ok": True, "uart": uart_ok, "port": PORT}), 200
 
 
-@app.post("/api/sonar/on")
-def api_sonar_on():
-    try:
-        c = _get_client()
-        c.sonar_on()
-        with _lock:
-            _state["active"] = True
-            _state["error"] = None
-        return jsonify(_snapshot())
-    except Exception as exc:
-        with _lock:
-            _state["error"] = str(exc)
-            _state["active"] = False
-        return jsonify(_snapshot()), 500
-
-
-@app.post("/api/sonar/off")
-def api_sonar_off():
-    try:
-        c = _get_client()
-        c.sonar_off()
-        with _lock:
-            _state["active"] = False
-            _state["front"] = -1
-            _state["left"] = -1
-            _state["right"] = -1
-            _state["error"] = None
-        return jsonify(_snapshot())
-    except Exception as exc:
-        with _lock:
-            _state["error"] = str(exc)
-        return jsonify(_snapshot()), 500
-
-
+@app.get("/api/state")
 @app.get("/api/stream")
-def api_stream():
+def api_stream_or_state():
+    if request.path.endswith("/state"):
+        return jsonify(_snapshot())
+
     def gen():
         last = None
         while True:
@@ -347,7 +575,7 @@ def api_stream():
                 last = payload
             else:
                 yield ": keepalive\n\n"
-            time.sleep(0.1)
+            time.sleep(0.12)
 
     return Response(
         gen(),
@@ -356,11 +584,231 @@ def api_stream():
     )
 
 
+@app.post("/api/status")
+def api_status():
+    try:
+        c = _get_client()
+        st = c.status()
+        with _lock:
+            _state["error"] = None
+        _push_log(st.dashboard())
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/sonar/on")
+def api_sonar_on():
+    try:
+        c = _get_client()
+        c.sonar_on()
+        with _lock:
+            _state["sonar_active"] = True
+            _state["error"] = None
+        _push_log("OK,SONAR,ON")
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/sonar/off")
+def api_sonar_off():
+    try:
+        c = _get_client()
+        c.sonar_off()
+        with _lock:
+            _state["sonar_active"] = False
+            _state["front"] = -1
+            _state["left"] = -1
+            _state["right"] = -1
+            _state["error"] = None
+        _push_log("OK,SONAR,OFF")
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/caps")
+def api_caps():
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        fwd = int(data.get("forward", DEFAULT_CAP))
+        rev = int(data.get("reverse", DEFAULT_CAP))
+        fwd = max(0, min(100, fwd))
+        rev = max(0, min(100, rev))
+        c = _get_client()
+        c.set_cap("FORWARD", fwd)
+        c.set_cap("REVERSE", rev)
+        with _lock:
+            _state["forward_cap"] = fwd
+            _state["reverse_cap"] = rev
+            _state["error"] = None
+        _push_log(f"OK,CAP F={fwd} R={rev}")
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/pi/on")
+def api_pi_on():
+    global _pi_control
+    try:
+        c = _get_client()
+        # leave sonar diag if needed
+        try:
+            c.sonar_off()
+        except Exception:
+            pass
+        with _lock:
+            _state["sonar_active"] = False
+        data = request.get_json(force=True, silent=True) or {}
+        fwd = int(data.get("forward", _state.get("forward_cap", DEFAULT_CAP)))
+        rev = int(data.get("reverse", _state.get("reverse_cap", DEFAULT_CAP)))
+        fwd = max(0, min(100, fwd))
+        rev = max(0, min(100, rev))
+        c.set_cap("FORWARD", fwd)
+        c.set_cap("REVERSE", rev)
+        _ensure_heartbeat()
+        c.mode_auto()
+        _pi_control = True
+        with _lock:
+            _state["forward_cap"] = fwd
+            _state["reverse_cap"] = rev
+            _state["pi_control"] = True
+            _state["error"] = None
+        _push_log("OK,AUTO (Pi control)")
+        c.status()
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/pi/off")
+def api_pi_off():
+    global _pi_control
+    try:
+        c = _get_client()
+        c.mode_manual()
+        _pi_control = False
+        with _lock:
+            _state["pi_control"] = False
+            _state["error"] = None
+        _push_log("OK,MANUAL")
+        c.status()
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/drive")
+def api_drive():
+    """Joystick pulse: steer -100..100, throttle -100..100 (neg=reverse)."""
+    try:
+        if not _pi_control:
+            raise RuntimeError("Pi control is OFF — engage first")
+        data = request.get_json(force=True, silent=True) or {}
+        steer = int(data.get("steer", 0))
+        thr = int(data.get("throttle", 0))
+        dur = int(data.get("duration_ms", JOYSTICK_DRIVE_MS))
+        steer = max(-100, min(100, steer))
+        thr = max(-100, min(100, thr))
+        dur = max(50, min(1000, dur))
+        if abs(steer) < 8 and abs(thr) < 8:
+            return jsonify(_snapshot())
+        direction = 1 if thr >= 0 else 2
+        c = _get_client()
+        _ensure_heartbeat()
+        c.drive(direction, steer, dur)
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/pullover/left")
+@app.post("/api/pullover/right")
+@app.post("/api/pullover/abort")
+def api_pullover():
+    global _pi_control
+    try:
+        c = _get_client()
+        try:
+            c.sonar_off()
+        except Exception:
+            pass
+        with _lock:
+            _state["sonar_active"] = False
+        _ensure_heartbeat()
+        path = request.path
+        if path.endswith("/left"):
+            # pullover seizes control itself; heartbeat still required
+            msg = c.pullover_left()
+            _pi_control = False
+        elif path.endswith("/right"):
+            msg = c.pullover_right()
+            _pi_control = False
+        else:
+            msg = c.pullover_abort()
+        _push_log(msg)
+        with _lock:
+            _state["error"] = None
+            _state["pi_control"] = _pi_control
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/stop")
+def api_stop():
+    global _pi_control
+    try:
+        c = _get_client()
+        msg = c.stop()
+        _pi_control = False
+        with _lock:
+            _state["pi_control"] = False
+            _state["error"] = None
+        _push_log(msg)
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/reset")
+def api_reset():
+    try:
+        c = _get_client()
+        msg = c.reset()
+        with _lock:
+            _state["error"] = None
+        _push_log(msg)
+        c.status()
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/manual")
+def api_manual():
+    global _pi_control
+    try:
+        c = _get_client()
+        msg = c.mode_manual()
+        _pi_control = False
+        with _lock:
+            _state["pi_control"] = False
+            _state["error"] = None
+        _push_log(msg)
+        c.status()
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
 def main() -> None:
-    # Open UART early so failures show in the terminal
     try:
         _get_client()
-        print(f"UART open. UI: http://0.0.0.0:{PORT}/ (use Pi LAN IP from laptop)")
+        _start_status_poller()
+        print(f"UART open. UI: http://0.0.0.0:{PORT}/")
     except Exception as exc:
         print(f"WARN: UART not open yet: {exc}", file=sys.stderr)
     app.run(host=HOST, port=PORT, threaded=True, debug=False)

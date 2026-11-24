@@ -29,6 +29,14 @@
 //   PULLOVER,LEFT
 //   PULLOVER,RIGHT
 //   PULLOVER,ABORT
+//   PULLOVER,CFG?
+//   PULLOVER,SET,SIDE,10
+//   PULLOVER,SET,BAND,2
+//   PULLOVER,SET,FRONT,25
+//   PULLOVER,SET,CREEP,12
+//   PULLOVER,SET,STEER,28
+//   PULLOVER,SET,STABLE,400
+//   PULLOVER,SET,TIMEOUT,15000
 //
 // All commands end with '\n'.
 // ============================================================
@@ -107,13 +115,14 @@ const uint32_t OVERRIDE_MAX_DRIVE_MS = 1500;
 const uint32_t OVERRIDE_NEUTRAL_HOLD_MS = 500;
 
 // Pull-over (HC-SR04 closed loop on RP2040)
-const int PULLOVER_SIDE_TARGET_CM = 10;
-const int PULLOVER_SIDE_BAND_CM = 2;       // accept 8..12 cm
-const int PULLOVER_FRONT_STOP_CM = 25;
-const int PULLOVER_CREEP_CAP = 12;        // % of forward PWM span
-const int PULLOVER_STEER_MAX = 28;        // % steer toward wall
-const uint32_t PULLOVER_TIMEOUT_MS = 15000;
-const uint32_t PULLOVER_STABLE_MS = 400;
+// Runtime-tunable via PULLOVER,SET / PULLOVER,CFG? (defaults below).
+int pulloverSideTargetCm = 10;
+int pulloverSideBandCm = 2;              // accept target±band cm
+int pulloverFrontStopCm = 25;
+int pulloverCreepCap = 12;               // % of forward PWM span
+int pulloverSteerMax = 28;               // % steer toward wall
+uint32_t pulloverTimeoutMs = 15000;
+uint32_t pulloverStableMs = 400;
 const uint32_t PULLOVER_RANGE_TX_MS = 200;
 const uint32_t SONAR_TIMEOUT_US = 25000;  // ~4 m
 const uint32_t SONAR_GAP_MS = 60;         // stagger sensors
@@ -463,23 +472,23 @@ void sendRangeTelemetry() {
 
 int pulloverCreepThrottlePulse() {
   int forwardOutput =
-      RC_NEUTRAL + (RC_MAX - RC_NEUTRAL) * PULLOVER_CREEP_CAP / 100;
+      RC_NEUTRAL + (RC_MAX - RC_NEUTRAL) * pulloverCreepCap / 100;
   if (REVERSE_THROTTLE) {
-    return RC_NEUTRAL - (RC_NEUTRAL - RC_MIN) * PULLOVER_CREEP_CAP / 100;
+    return RC_NEUTRAL - (RC_NEUTRAL - RC_MIN) * pulloverCreepCap / 100;
   }
   return forwardOutput;
 }
 
 int pulloverSteerTowardWall() {
-  int angle = (pulloverSide == PULL_LEFT) ? -PULLOVER_STEER_MAX : PULLOVER_STEER_MAX;
+  int angle = (pulloverSide == PULL_LEFT) ? -pulloverSteerMax : pulloverSteerMax;
   int side = sonarSideCm();
   if (side > 0) {
-    int err = side - PULLOVER_SIDE_TARGET_CM;
+    int err = side - pulloverSideTargetCm;
     // Scale steer by error; still capped.
-    int mag = constrain(abs(err) * 3, 8, PULLOVER_STEER_MAX);
+    int mag = constrain(abs(err) * 3, 8, pulloverSteerMax);
     angle = (pulloverSide == PULL_LEFT) ? -mag : mag;
     // If too close to wall, steer away slightly
-    if (err < -PULLOVER_SIDE_BAND_CM) {
+    if (err < -pulloverSideBandCm) {
       angle = (pulloverSide == PULL_LEFT) ? mag / 2 : -mag / 2;
     }
   }
@@ -562,7 +571,7 @@ void updatePullover() {
     return;
   }
 
-  if ((uint32_t)(nowMs - pulloverStartMs) > PULLOVER_TIMEOUT_MS) {
+  if ((uint32_t)(nowMs - pulloverStartMs) > pulloverTimeoutMs) {
     cancelPullover();
     setNeutral();
     mode = MODE_MANUAL;
@@ -576,7 +585,7 @@ void updatePullover() {
   int front = sonarFrontCm();
   int side = sonarSideCm();
 
-  if (front > 0 && front < PULLOVER_FRONT_STOP_CM) {
+  if (front > 0 && front < pulloverFrontStopCm) {
     pulloverFrontFault();
     return;
   }
@@ -586,7 +595,7 @@ void updatePullover() {
   int thrPulse = pulloverCreepThrottlePulse();
 
   bool inBand = (side > 0) &&
-      (abs(side - PULLOVER_SIDE_TARGET_CM) <= PULLOVER_SIDE_BAND_CM);
+      (abs(side - pulloverSideTargetCm) <= pulloverSideBandCm);
 
   if (inBand) {
     if (pulloverStableStartMs == 0) {
@@ -595,7 +604,7 @@ void updatePullover() {
     // Ease throttle while holding position
     thrPulse = RC_NEUTRAL + (thrPulse - RC_NEUTRAL) / 3;
     steerPulse = RC_NEUTRAL;
-    if ((uint32_t)(nowMs - pulloverStableStartMs) >= PULLOVER_STABLE_MS) {
+    if ((uint32_t)(nowMs - pulloverStableStartMs) >= pulloverStableMs) {
       finishPulloverOk();
       return;
     }
@@ -1094,6 +1103,94 @@ void handleCommand(char* line) {
 
   // ---------------- PULLOVER --------------------------------
 
+  if (strcmp(line, "PULLOVER,CFG?") == 0) {
+    Serial1.print("OK,PULLOVER,CFG,");
+    Serial1.print(pulloverSideTargetCm);
+    Serial1.print(',');
+    Serial1.print(pulloverSideBandCm);
+    Serial1.print(',');
+    Serial1.print(pulloverFrontStopCm);
+    Serial1.print(',');
+    Serial1.print(pulloverCreepCap);
+    Serial1.print(',');
+    Serial1.print(pulloverSteerMax);
+    Serial1.print(',');
+    Serial1.print(pulloverStableMs);
+    Serial1.print(',');
+    Serial1.println(pulloverTimeoutMs);
+    return;
+  }
+
+  if (strncmp(line, "PULLOVER,SET,", 13) == 0) {
+    if (mode == MODE_PULLOVER) {
+      Serial1.println("ERR,PULLOVER,ACTIVE");
+      return;
+    }
+    char* keyText = line + 13;
+    char* valueText = strchr(keyText, ',');
+    if (!valueText) {
+      Serial1.println("ERR,PULLOVER,SET_FORMAT");
+      return;
+    }
+    *valueText++ = '\0';
+    long value;
+    if (!parseLongStrict(valueText, value)) {
+      Serial1.println("ERR,PULLOVER,SET_FORMAT");
+      return;
+    }
+
+    if (strcmp(keyText, "SIDE") == 0) {
+      if (value < 5 || value > 80) {
+        Serial1.println("ERR,PULLOVER,SET_RANGE");
+        return;
+      }
+      pulloverSideTargetCm = (int)value;
+    } else if (strcmp(keyText, "BAND") == 0) {
+      if (value < 1 || value > 20) {
+        Serial1.println("ERR,PULLOVER,SET_RANGE");
+        return;
+      }
+      pulloverSideBandCm = (int)value;
+    } else if (strcmp(keyText, "FRONT") == 0) {
+      if (value < 10 || value > 100) {
+        Serial1.println("ERR,PULLOVER,SET_RANGE");
+        return;
+      }
+      pulloverFrontStopCm = (int)value;
+    } else if (strcmp(keyText, "CREEP") == 0) {
+      if (value < 5 || value > 40) {
+        Serial1.println("ERR,PULLOVER,SET_RANGE");
+        return;
+      }
+      pulloverCreepCap = (int)value;
+    } else if (strcmp(keyText, "STEER") == 0) {
+      if (value < 5 || value > 50) {
+        Serial1.println("ERR,PULLOVER,SET_RANGE");
+        return;
+      }
+      pulloverSteerMax = (int)value;
+    } else if (strcmp(keyText, "STABLE") == 0) {
+      if (value < 100 || value > 3000) {
+        Serial1.println("ERR,PULLOVER,SET_RANGE");
+        return;
+      }
+      pulloverStableMs = (uint32_t)value;
+    } else if (strcmp(keyText, "TIMEOUT") == 0) {
+      if (value < 3000 || value > 60000) {
+        Serial1.println("ERR,PULLOVER,SET_RANGE");
+        return;
+      }
+      pulloverTimeoutMs = (uint32_t)value;
+    } else {
+      Serial1.println("ERR,PULLOVER,SET_KEY");
+      return;
+    }
+
+    Serial1.print("OK,PULLOVER,SET,");
+    Serial1.println(keyText);
+    return;
+  }
+
   if (strcmp(line, "PULLOVER,LEFT") == 0 ||
       strcmp(line, "PULLOVER,RIGHT") == 0) {
     if (mode == MODE_OVERRIDE) {
@@ -1583,7 +1680,8 @@ void setup() {
   Serial.println("Initial caps: F20% / R20%");
   Serial.println("AUTO/OVERRIDE/PULLOVER heartbeat timeout: 250 ms");
   Serial.println("Override: F15% R10%, steer +/-50, max 1500ms");
-  Serial.println("Pullover: side 10cm, front stop 25cm, creep 12%");
+  Serial.println("Pullover defaults: side 10cm band 2 front 25 creep 12");
+  Serial.println("PULLOVER,CFG? | PULLOVER,SET,<KEY>,<val>");
   Serial.println("Waiting for receiver and neutral...");
 }
 

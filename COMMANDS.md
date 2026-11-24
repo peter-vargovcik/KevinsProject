@@ -259,9 +259,19 @@ Browser: `http://192.168.1.152:8088/`
 
 - Live STATUS + sonar gauges (`SONAR,ON` / `OFF`)
 - Pull-over LEFT / RIGHT / ABORT
+- Pullover params (SIDE/BAND/FRONT/CREEP/STEER/STABLE/TIMEOUT) via `PULLOVER,SET` / `CFG?`
 - Virtual joystick (Pi control ON → AUTO + capped DRIVE pulses)
 - Throttle caps default **25%** (sliders 0–100, Apply caps)
+- Joystick pulse duration (Flask-local, default 280 ms)
 - STOP / RESET / MANUAL
+
+UART (examples):
+
+```
+PULLOVER,CFG?
+PULLOVER,SET,SIDE,15
+PULLOVER,SET,STABLE,800
+```
 
 **Start on boot** (systemd + 60 s health watchdog):
 

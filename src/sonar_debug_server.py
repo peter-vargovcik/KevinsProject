@@ -7,6 +7,8 @@ Features:
   - Pull-over LEFT / RIGHT / ABORT
   - Virtual joystick (MODE,AUTO + CAP + DRIVE pulses)
   - Throttle caps default 25% (user-adjustable 0–100)
+  - Pullover tunables (SIDE/BAND/FRONT/CREEP/STEER/STABLE/TIMEOUT)
+  - Joystick pulse duration (Flask-local)
   - STOP / RESET / MANUAL
 
   http://<pi-ip>:8088/
@@ -31,8 +33,37 @@ from rp2040_uart import Rp2040Client, parse_status  # noqa: E402
 HOST = "0.0.0.0"
 PORT = 8088
 DEFAULT_CAP = 25
-JOYSTICK_DRIVE_MS = 280
+DEFAULT_JOYSTICK_MS = 280
 LOG_MAX = 80
+
+PULLOVER_DEFAULTS = {
+    "side": 10,
+    "band": 2,
+    "front": 25,
+    "creep": 12,
+    "steer": 28,
+    "stable": 400,
+    "timeout": 15000,
+}
+PULLOVER_KEYS = ("side", "band", "front", "creep", "steer", "stable", "timeout")
+PULLOVER_SET_KEY = {
+    "side": "SIDE",
+    "band": "BAND",
+    "front": "FRONT",
+    "creep": "CREEP",
+    "steer": "STEER",
+    "stable": "STABLE",
+    "timeout": "TIMEOUT",
+}
+PULLOVER_CLAMP = {
+    "side": (5, 80),
+    "band": (1, 20),
+    "front": (10, 100),
+    "creep": (5, 40),
+    "steer": (5, 50),
+    "stable": (100, 3000),
+    "timeout": (3000, 60000),
+}
 
 _lock = threading.Lock()
 _state: dict[str, Any] = {
@@ -55,9 +86,12 @@ _state: dict[str, Any] = {
     "drive_active": False,
     "uptime_ms": 0,
     "pi_control": False,
+    "joystick_ms": DEFAULT_JOYSTICK_MS,
+    "pullover": dict(PULLOVER_DEFAULTS),
     "last_event": "",
     "log": [],
 }
+_joystick_ms = DEFAULT_JOYSTICK_MS
 _log: Deque[str] = deque(maxlen=LOG_MAX)
 _client: Optional[Rp2040Client] = None
 _client_lock = threading.Lock()
@@ -160,6 +194,8 @@ def _snapshot() -> dict[str, Any]:
     with _lock:
         snap = dict(_state)
         snap["pi_control"] = _pi_control
+        snap["joystick_ms"] = _joystick_ms
+        snap["pullover"] = dict(_state.get("pullover") or PULLOVER_DEFAULTS)
         snap["log"] = list(_log)
         return snap
 
@@ -343,6 +379,42 @@ PAGE = r"""<!DOCTYPE html>
       <button type="button" id="btnPullAbort" class="bad">ABORT</button>
     </div>
     <p class="hint">Takes over even if TX sticks are not centered. Uses front + side sonar. Keep clear / wheels lifted for first runs.</p>
+    <div class="row">
+      <label class="cap">Side target
+        <input type="range" id="poSide" min="5" max="80" value="10"/>
+        <span class="capnum"><span id="poSideN">10</span> cm</span>
+      </label>
+      <label class="cap">Side band ±
+        <input type="range" id="poBand" min="1" max="20" value="2"/>
+        <span class="capnum"><span id="poBandN">2</span> cm</span>
+      </label>
+      <label class="cap">Front stop
+        <input type="range" id="poFront" min="10" max="100" value="25"/>
+        <span class="capnum"><span id="poFrontN">25</span> cm</span>
+      </label>
+    </div>
+    <div class="row">
+      <label class="cap">Creep
+        <input type="range" id="poCreep" min="5" max="40" value="12"/>
+        <span class="capnum"><span id="poCreepN">12</span>%</span>
+      </label>
+      <label class="cap">Steer max
+        <input type="range" id="poSteer" min="5" max="50" value="28"/>
+        <span class="capnum"><span id="poSteerN">28</span>%</span>
+      </label>
+      <label class="cap">Stable hold
+        <input type="range" id="poStable" min="100" max="3000" step="50" value="400"/>
+        <span class="capnum"><span id="poStableN">400</span> ms</span>
+      </label>
+      <label class="cap">Timeout
+        <input type="range" id="poTimeout" min="3000" max="60000" step="1000" value="15000"/>
+        <span class="capnum"><span id="poTimeoutN">15000</span> ms</span>
+      </label>
+    </div>
+    <div class="row">
+      <button type="button" id="btnApplyPullCfg" class="accent">Apply pullover params</button>
+      <button type="button" id="btnReloadPullCfg">Reload from board</button>
+    </div>
   </section>
 
   <section class="panel">
@@ -360,13 +432,18 @@ PAGE = r"""<!DOCTYPE html>
         <input type="range" id="capRev" min="0" max="100" value="25"/>
         <span class="capnum"><span id="capRevN">25</span>%</span>
       </label>
+      <label class="cap">Pulse duration
+        <input type="range" id="joyMs" min="80" max="800" step="20" value="280"/>
+        <span class="capnum"><span id="joyMsN">280</span> ms</span>
+      </label>
     </div>
     <div class="row">
       <button type="button" id="btnApplyCaps" class="accent">Apply caps</button>
+      <button type="button" id="btnApplyJoyMs">Apply pulse ms</button>
     </div>
     <div id="stickWrap"><div id="stickBase"></div><div id="stickKnob"></div></div>
     <div class="joyread" id="joyRead">steer 0 · thr 0 · idle</div>
-    <p class="hint">Engage Pi control first. Stick sends capped DRIVE pulses (AUTO). Release stick to coast to stop (~0.3 s).</p>
+    <p class="hint">Engage Pi control first. Stick sends capped DRIVE pulses (AUTO). Release stick to coast to stop.</p>
   </section>
 
   <section class="panel" style="grid-column: 1 / -1">
@@ -393,10 +470,30 @@ function setMeter(id, cm) {
   el.classList.toggle("dead", !live);
 }
 
+function syncPullSliders(p) {
+  if (!p) return;
+  const map = [
+    ["poSide", "poSideN", "side"],
+    ["poBand", "poBandN", "band"],
+    ["poFront", "poFrontN", "front"],
+    ["poCreep", "poCreepN", "creep"],
+    ["poSteer", "poSteerN", "steer"],
+    ["poStable", "poStableN", "stable"],
+    ["poTimeout", "poTimeoutN", "timeout"],
+  ];
+  for (const [id, nid, key] of map) {
+    if (p[key] === undefined || p[key] === null) continue;
+    if (document.activeElement && document.activeElement.id === id) continue;
+    $(id).value = p[key];
+    $(nid).textContent = p[key];
+  }
+}
+
 function render(s) {
   setMeter("v-front", s.front);
   setMeter("v-left", s.left);
   setMeter("v-right", s.right);
+  const p = s.pullover || {};
   const kv = [
     ["mode", s.mode],
     ["armed", s.armed ? "1" : "0"],
@@ -404,12 +501,22 @@ function render(s) {
     ["steer in/out", `${s.steer_in}/${s.steer_out}`],
     ["thr in/out", `${s.thr_in}/${s.thr_out}`],
     ["caps F/R", `${s.forward_cap}% / ${s.reverse_cap}%`],
+    ["pull side/band", `${p.side ?? "?"} / ±${p.band ?? "?"} cm`],
+    ["pull front/creep", `${p.front ?? "?"} cm / ${p.creep ?? "?"}%`],
+    ["pull stable/to", `${p.stable ?? "?"} / ${p.timeout ?? "?"} ms`],
+    ["joy pulse", (s.joystick_ms ?? "?") + " ms"],
     ["drive", s.drive_active ? "1" : "0"],
     ["sonar", s.sonar_active ? "ON" : "OFF"],
     ["pi control", s.pi_control ? "ON" : "OFF"],
     ["uptime", s.uptime_ms + " ms"],
   ];
   $("statusKv").innerHTML = kv.map(([k,v]) => `<span>${k}</span><span>${v}</span>`).join("");
+  syncPullSliders(p);
+  if (typeof s.joystick_ms === "number" &&
+      !(document.activeElement && document.activeElement.id === "joyMs")) {
+    $("joyMs").value = s.joystick_ms;
+    $("joyMsN").textContent = s.joystick_ms;
+  }
   if (s.log && s.log.length) $("log").textContent = s.log.join("\n");
   if (s.error) setErr(s.error); else if (!s.error) { /* keep last until cleared */ }
   state.pi = !!s.pi_control;
@@ -458,6 +565,32 @@ $("capRev").oninput = syncCapLabels;
 $("btnApplyCaps").onclick = () => post("/api/caps", {
   forward: +$("capFwd").value,
   reverse: +$("capRev").value,
+});
+
+function bindPullLabel(id, nid) {
+  $(id).oninput = () => { $(nid).textContent = $(id).value; };
+}
+bindPullLabel("poSide", "poSideN");
+bindPullLabel("poBand", "poBandN");
+bindPullLabel("poFront", "poFrontN");
+bindPullLabel("poCreep", "poCreepN");
+bindPullLabel("poSteer", "poSteerN");
+bindPullLabel("poStable", "poStableN");
+bindPullLabel("poTimeout", "poTimeoutN");
+$("joyMs").oninput = () => { $("joyMsN").textContent = $("joyMs").value; };
+
+$("btnApplyPullCfg").onclick = () => post("/api/pullover/cfg", {
+  side: +$("poSide").value,
+  band: +$("poBand").value,
+  front: +$("poFront").value,
+  creep: +$("poCreep").value,
+  steer: +$("poSteer").value,
+  stable: +$("poStable").value,
+  timeout: +$("poTimeout").value,
+});
+$("btnReloadPullCfg").onclick = () => post("/api/pullover/cfg/reload");
+$("btnApplyJoyMs").onclick = () => post("/api/joystick/ms", {
+  duration_ms: +$("joyMs").value,
 });
 
 /* ---- joystick ---- */
@@ -709,7 +842,7 @@ def api_drive():
         data = request.get_json(force=True, silent=True) or {}
         steer = int(data.get("steer", 0))
         thr = int(data.get("throttle", 0))
-        dur = int(data.get("duration_ms", JOYSTICK_DRIVE_MS))
+        dur = int(data.get("duration_ms", _joystick_ms))
         steer = max(-100, min(100, steer))
         thr = max(-100, min(100, thr))
         dur = max(50, min(1000, dur))
@@ -719,6 +852,79 @@ def api_drive():
         c = _get_client()
         _ensure_heartbeat()
         c.drive(direction, steer, dur)
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/joystick/ms")
+def api_joystick_ms():
+    global _joystick_ms
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        ms = int(data.get("duration_ms", DEFAULT_JOYSTICK_MS))
+        ms = max(80, min(800, ms))
+        _joystick_ms = ms
+        with _lock:
+            _state["joystick_ms"] = ms
+            _state["error"] = None
+        _push_log(f"OK,JOYSTICK_MS,{ms}")
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+def _apply_pullover_cfg(data: dict[str, Any]) -> dict[str, int]:
+    c = _get_client()
+    applied: dict[str, int] = {}
+    for key in PULLOVER_KEYS:
+        if key not in data:
+            continue
+        lo, hi = PULLOVER_CLAMP[key]
+        val = int(data[key])
+        val = max(lo, min(hi, val))
+        c.pullover_set(PULLOVER_SET_KEY[key], val)
+        applied[key] = val
+    cfg = c.pullover_cfg()
+    with _lock:
+        _state["pullover"] = cfg
+        _state["error"] = None
+    return cfg
+
+
+def _reload_pullover_cfg() -> dict[str, int]:
+    c = _get_client()
+    cfg = c.pullover_cfg()
+    with _lock:
+        _state["pullover"] = cfg
+        _state["error"] = None
+    return cfg
+
+
+@app.post("/api/pullover/cfg")
+def api_pullover_cfg():
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        cfg = _apply_pullover_cfg(data)
+        _push_log(
+            "OK,PULLOVER,CFG,"
+            f"{cfg['side']},{cfg['band']},{cfg['front']},"
+            f"{cfg['creep']},{cfg['steer']},{cfg['stable']},{cfg['timeout']}"
+        )
+        return jsonify(_snapshot())
+    except Exception as exc:
+        return _err(exc)
+
+
+@app.post("/api/pullover/cfg/reload")
+def api_pullover_cfg_reload():
+    try:
+        cfg = _reload_pullover_cfg()
+        _push_log(
+            "OK,PULLOVER,CFG,"
+            f"{cfg['side']},{cfg['band']},{cfg['front']},"
+            f"{cfg['creep']},{cfg['steer']},{cfg['stable']},{cfg['timeout']}"
+        )
         return jsonify(_snapshot())
     except Exception as exc:
         return _err(exc)
@@ -808,6 +1014,11 @@ def main() -> None:
     try:
         _get_client()
         _start_status_poller()
+        try:
+            _reload_pullover_cfg()
+            print("Pullover CFG loaded from board.")
+        except Exception as exc:
+            print(f"WARN: PULLOVER,CFG? failed: {exc}", file=sys.stderr)
         print(f"UART open. UI: http://0.0.0.0:{PORT}/")
     except Exception as exc:
         print(f"WARN: UART not open yet: {exc}", file=sys.stderr)

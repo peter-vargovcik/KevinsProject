@@ -369,6 +369,41 @@ class Rp2040Client:
         )
         return line
 
+    def pullover_cfg(self, timeout_s: Optional[float] = None) -> dict:
+        """Query runtime pullover tunables via PULLOVER,CFG?."""
+        self.send_raw("PULLOVER,CFG?")
+        line = self.wait_line(
+            prefixes=("OK,PULLOVER,CFG,", "ERR,"), timeout_s=timeout_s
+        )
+        if line.startswith("ERR,"):
+            raise RuntimeError(line)
+        parts = line.split(",")
+        # OK,PULLOVER,CFG,side,band,front,creep,steer,stable,timeout
+        if len(parts) < 10:
+            raise RuntimeError(f"Bad pullover CFG: {line!r}")
+        return {
+            "side": int(parts[3]),
+            "band": int(parts[4]),
+            "front": int(parts[5]),
+            "creep": int(parts[6]),
+            "steer": int(parts[7]),
+            "stable": int(parts[8]),
+            "timeout": int(parts[9]),
+        }
+
+    def pullover_set(
+        self, key: str, value: int, timeout_s: Optional[float] = None
+    ) -> str:
+        """Set one pullover tunable: SIDE|BAND|FRONT|CREEP|STEER|STABLE|TIMEOUT."""
+        key_u = key.strip().upper()
+        self.send_raw(f"PULLOVER,SET,{key_u},{int(value)}")
+        line = self.wait_line(
+            prefixes=(f"OK,PULLOVER,SET,{key_u}", "ERR,"), timeout_s=timeout_s
+        )
+        if line.startswith("ERR,"):
+            raise RuntimeError(line)
+        return line
+
     def wait_pullover_done(self, timeout_s: float = 20.0) -> str:
         """Wait for DONE,PULLOVER or a PULLOVER error."""
         line = self.wait_line(

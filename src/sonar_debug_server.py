@@ -333,10 +333,31 @@ PAGE = r"""<!DOCTYPE html>
   }
   h1 { margin: 0; font-size: 1.45rem; font-weight: 600; letter-spacing: .02em; }
   .sub { color: var(--muted); font-size: .9rem; }
+  .shell { padding: 0.75rem 1.25rem 1.5rem; }
+  .status-strip {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: .65rem .9rem;
+    margin-bottom: .75rem;
+  }
+  .tabs {
+    display: flex; flex-wrap: wrap; gap: .35rem;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: .85rem; padding-bottom: .35rem;
+  }
+  .tabs button.tab {
+    border: 1px solid transparent; background: transparent;
+    color: var(--muted); padding: .45rem .85rem; font-weight: 600;
+  }
+  .tabs button.tab:hover { color: var(--ink); border-color: var(--line); }
+  .tabs button.tab.active {
+    color: var(--accent); border-color: var(--accent); background: #12171c;
+  }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
   .grid {
     display: grid;
     gap: 1rem;
-    padding: 1rem 1.25rem 1.5rem;
     grid-template-columns: 1.1fr 1fr;
   }
   @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
@@ -345,6 +366,7 @@ PAGE = r"""<!DOCTYPE html>
     border: 1px solid var(--line);
     padding: 1rem 1.1rem 1.15rem;
   }
+  .panel.full { grid-column: 1 / -1; }
   .panel h2 {
     margin: 0 0 .75rem;
     font-size: .72rem;
@@ -434,153 +456,191 @@ PAGE = r"""<!DOCTYPE html>
   </div>
 </header>
 
-<div class="grid">
-  <section class="panel">
-    <h2>Status</h2>
+<div class="shell">
+  <div class="status-strip">
     <div class="kv" id="statusKv"></div>
     <div class="err" id="err"></div>
-  </section>
+  </div>
 
-  <section class="panel">
-    <h2>Sonar</h2>
-    <div class="row">
-      <button type="button" id="btnSonarOn" class="ok">Sonar ON</button>
-      <button type="button" id="btnSonarOff" class="bad">Sonar OFF</button>
-    </div>
-    <div class="meters" style="margin-top:.75rem">
-      <div class="meter"><div class="lab">Front GP14/15</div><div class="val dead" id="v-front">—</div></div>
-      <div class="meter"><div class="lab">Left GP8/9</div><div class="val dead" id="v-left">—</div></div>
-      <div class="meter"><div class="lab">Right GP16/17</div><div class="val dead" id="v-right">—</div></div>
-    </div>
-  </section>
+  <nav class="tabs" id="tabBar" role="tablist">
+    <button type="button" class="tab active" data-tab="overview">Overview</button>
+    <button type="button" class="tab" data-tab="pullover">Pullover</button>
+    <button type="button" class="tab" data-tab="detection">Detection</button>
+    <button type="button" class="tab" data-tab="drive">Drive</button>
+    <button type="button" class="tab" data-tab="log">Log</button>
+  </nav>
 
-  <section class="panel">
-    <h2>Pull-over</h2>
-    <div class="row">
-      <button type="button" id="btnPullL" class="accent">PULLOVER LEFT</button>
-      <button type="button" id="btnPullR" class="accent">PULLOVER RIGHT</button>
-      <button type="button" id="btnPullAbort" class="bad">ABORT</button>
+  <div class="tab-panel active" id="tab-overview">
+    <div class="grid">
+      <section class="panel">
+        <h2>Sonar</h2>
+        <div class="row">
+          <button type="button" id="btnSonarOn" class="ok">Sonar ON</button>
+          <button type="button" id="btnSonarOff" class="bad">Sonar OFF</button>
+        </div>
+        <div class="meters" style="margin-top:.75rem">
+          <div class="meter"><div class="lab">Front GP14/15</div><div class="val dead" id="v-front">—</div></div>
+          <div class="meter"><div class="lab">Left GP8/9</div><div class="val dead" id="v-left">—</div></div>
+          <div class="meter"><div class="lab">Right GP16/17</div><div class="val dead" id="v-right">—</div></div>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Quick actions</h2>
+        <div class="row">
+          <button type="button" id="btnPullL" class="accent">PULLOVER LEFT</button>
+          <button type="button" id="btnPullR" class="accent">PULLOVER RIGHT</button>
+          <button type="button" id="btnPullAbort" class="bad">ABORT</button>
+        </div>
+        <div class="row">
+          <button type="button" id="btnDetArm" class="ok">Arm detection</button>
+          <button type="button" id="btnDetDisarm" class="bad">Disarm</button>
+        </div>
+        <p class="hint">Full pullover params and detection tuning are on their tabs. STOP stays in the header.</p>
+      </section>
     </div>
-    <p class="hint">Takes over even if TX sticks are not centered. Uses front + side sonar. Keep clear / wheels lifted for first runs.</p>
-    <div class="row">
-      <label class="cap">Side target
-        <input type="range" id="poSide" min="5" max="80" value="10"/>
-        <span class="capnum"><span id="poSideN">10</span> cm</span>
-      </label>
-      <label class="cap">Side band ±
-        <input type="range" id="poBand" min="1" max="20" value="2"/>
-        <span class="capnum"><span id="poBandN">2</span> cm</span>
-      </label>
-      <label class="cap">Front stop
-        <input type="range" id="poFront" min="10" max="100" value="25"/>
-        <span class="capnum"><span id="poFrontN">25</span> cm</span>
-      </label>
-    </div>
-    <div class="row">
-      <label class="cap">Creep
-        <input type="range" id="poCreep" min="5" max="40" value="10"/>
-        <span class="capnum"><span id="poCreepN">10</span>%</span>
-      </label>
-      <label class="cap">Steer max
-        <input type="range" id="poSteer" min="5" max="50" value="28"/>
-        <span class="capnum"><span id="poSteerN">28</span>%</span>
-      </label>
-      <label class="cap">Stable hold
-        <input type="range" id="poStable" min="100" max="3000" step="50" value="400"/>
-        <span class="capnum"><span id="poStableN">400</span> ms</span>
-      </label>
-      <label class="cap">Timeout
-        <input type="range" id="poTimeout" min="3000" max="60000" step="1000" value="15000"/>
-        <span class="capnum"><span id="poTimeoutN">15000</span> ms</span>
-      </label>
-    </div>
-    <div class="row">
-      <button type="button" id="btnApplyPullCfg" class="accent">Apply pullover params</button>
-      <button type="button" id="btnReloadPullCfg">Reload from board</button>
-    </div>
-  </section>
+  </div>
 
-  <section class="panel" style="grid-column: 1 / -1">
-    <h2>Detection / auto-pullover</h2>
-    <div class="row">
-      <button type="button" id="btnDetArm" class="ok">Arm detection</button>
-      <button type="button" id="btnDetDisarm" class="bad">Disarm</button>
+  <div class="tab-panel" id="tab-pullover">
+    <div class="grid">
+      <section class="panel full">
+        <h2>Pull-over</h2>
+        <div class="row">
+          <button type="button" id="btnPullL2" class="accent">PULLOVER LEFT</button>
+          <button type="button" id="btnPullR2" class="accent">PULLOVER RIGHT</button>
+          <button type="button" id="btnPullAbort2" class="bad">ABORT</button>
+        </div>
+        <p class="hint">Takes over even if TX sticks are not centered. Uses front + side sonar. Keep clear / wheels lifted for first runs.</p>
+        <div class="row">
+          <label class="cap">Side target
+            <input type="range" id="poSide" min="5" max="80" value="10"/>
+            <span class="capnum"><span id="poSideN">10</span> cm</span>
+          </label>
+          <label class="cap">Side band ±
+            <input type="range" id="poBand" min="1" max="20" value="2"/>
+            <span class="capnum"><span id="poBandN">2</span> cm</span>
+          </label>
+          <label class="cap">Front stop
+            <input type="range" id="poFront" min="10" max="100" value="25"/>
+            <span class="capnum"><span id="poFrontN">25</span> cm</span>
+          </label>
+        </div>
+        <div class="row">
+          <label class="cap">Creep
+            <input type="range" id="poCreep" min="5" max="40" value="10"/>
+            <span class="capnum"><span id="poCreepN">10</span>%</span>
+          </label>
+          <label class="cap">Steer max
+            <input type="range" id="poSteer" min="5" max="50" value="28"/>
+            <span class="capnum"><span id="poSteerN">28</span>%</span>
+          </label>
+          <label class="cap">Stable hold
+            <input type="range" id="poStable" min="100" max="3000" step="50" value="400"/>
+            <span class="capnum"><span id="poStableN">400</span> ms</span>
+          </label>
+          <label class="cap">Timeout
+            <input type="range" id="poTimeout" min="3000" max="60000" step="1000" value="15000"/>
+            <span class="capnum"><span id="poTimeoutN">15000</span> ms</span>
+          </label>
+        </div>
+        <div class="row">
+          <button type="button" id="btnApplyPullCfg" class="accent">Apply pullover params</button>
+          <button type="button" id="btnReloadPullCfg">Reload from board</button>
+        </div>
+      </section>
     </div>
-    <p class="hint">Green LED = console ready. Yellow = armed (camera + TFLite). Red = wrong streak / pullover. Consecutive <code>wrong</code> fires pullover. Do not run live_arrow_* while this owns the LEDs.</p>
-    <div class="row">
-      <label class="cap">Wrong streak N
-        <input type="range" id="detStreak" min="2" max="30" value="5"/>
-        <span class="capnum"><span id="detStreakN">5</span></span>
-      </label>
-      <label class="cap">Confidence min
-        <input type="range" id="detConf" min="30" max="95" value="60"/>
-        <span class="capnum"><span id="detConfN">0.60</span></span>
-      </label>
-      <label class="cap">Cooldownoldown
-        <input type="range" id="detCool" min="3000" max="120000" step="1000" value="15000"/>
-        <span class="capnum"><span id="detCoolN">15000</span> ms</span>
-      </label>
-      <label class="cap">Process every N
-        <input type="range" id="detEvery" min="1" max="10" value="2"/>
-        <span class="capnum"><span id="detEveryN">2</span></span>
-      </label>
-      <label class="cap">JPEG quality
-        <input type="range" id="detJpeg" min="40" max="85" value="65"/>
-        <span class="capnum"><span id="detJpegN">65</span></span>
-      </label>
-    </div>
-    <div class="row">
-      <label class="chk"><input type="checkbox" id="detAuto" checked/> Auto-pullover</label>
-      <label class="chk"><input type="checkbox" id="detPreview" checked/> Preview</label>
-      <label class="chk"><input type="checkbox" id="detNoneReset" checked/> none resets streak</label>
-      <label class="chk"><input type="checkbox" id="detCorrectReset" checked/> correct resets streak</label>
-      <label class="chk"><input type="checkbox" id="detDisarmAfter"/> Disarm after pullover</label>
-      <label class="cap" style="min-width:7rem;flex:0">Side
-        <select id="detSide" style="background:#12171c;color:var(--ink);border:1px solid var(--line);padding:.35rem">
-          <option value="RIGHT" selected>RIGHT</option>
-          <option value="LEFT">LEFT</option>
-        </select>
-      </label>
-    </div>
-    <div class="row">
-      <button type="button" id="btnDetCfg" class="accent">Apply detection cfg</button>
-    </div>
-    <img id="detPreviewImg" class="preview" alt="detection preview (armed only)" src=""/>
-  </section>
+  </div>
 
-  <section class="panel">
-    <h2>Virtual joystick</h2>
-    <div class="row">
-      <button type="button" id="btnPiOn" class="ok">Pi control ON</button>
-      <button type="button" id="btnPiOff" class="bad">Pi control OFF</button>
+  <div class="tab-panel" id="tab-detection">
+    <div class="grid">
+      <section class="panel full">
+        <h2>Detection / auto-pullover</h2>
+        <div class="row">
+          <button type="button" id="btnDetArm2" class="ok">Arm detection</button>
+          <button type="button" id="btnDetDisarm2" class="bad">Disarm</button>
+        </div>
+        <p class="hint">Green = ready · Yellow = armed · Red = wrong/pullover. Consecutive <code>wrong</code> fires pullover. Do not run live_arrow_* while this owns the LEDs.</p>
+        <div class="row">
+          <label class="cap">Wrong streak N
+            <input type="range" id="detStreak" min="2" max="30" value="5"/>
+            <span class="capnum"><span id="detStreakN">5</span></span>
+          </label>
+          <label class="cap">Confidence min
+            <input type="range" id="detConf" min="30" max="95" value="60"/>
+            <span class="capnum"><span id="detConfN">0.60</span></span>
+          </label>
+          <label class="cap">Cooldownoldown
+            <input type="range" id="detCool" min="3000" max="120000" step="1000" value="15000"/>
+            <span class="capnum"><span id="detCoolN">15000</span> ms</span>
+          </label>
+          <label class="cap">Process every N
+            <input type="range" id="detEvery" min="1" max="10" value="2"/>
+            <span class="capnum"><span id="detEveryN">2</span></span>
+          </label>
+          <label class="cap">JPEG quality
+            <input type="range" id="detJpeg" min="40" max="85" value="65"/>
+            <span class="capnum"><span id="detJpegN">65</span></span>
+          </label>
+        </div>
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="detAuto" checked/> Auto-pullover</label>
+          <label class="chk"><input type="checkbox" id="detPreview" checked/> Preview</label>
+          <label class="chk"><input type="checkbox" id="detNoneReset" checked/> none resets streak</label>
+          <label class="chk"><input type="checkbox" id="detCorrectReset" checked/> correct resets streak</label>
+          <label class="chk"><input type="checkbox" id="detDisarmAfter"/> Disarm after pullover</label>
+          <label class="cap" style="min-width:7rem;flex:0">Side
+            <select id="detSide" style="background:#12171c;color:var(--ink);border:1px solid var(--line);padding:.35rem">
+              <option value="RIGHT" selected>RIGHT</option>
+              <option value="LEFT">LEFT</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <button type="button" id="btnDetCfg" class="accent">Apply detection cfg</button>
+        </div>
+        <img id="detPreviewImg" class="preview" alt="detection preview (armed only)" src=""/>
+      </section>
     </div>
-    <div class="row">
-      <label class="cap">Forward cap
-        <input type="range" id="capFwd" min="0" max="100" value="25"/>
-        <span class="capnum"><span id="capFwdN">25</span>%</span>
-      </label>
-      <label class="cap">Reverse cap
-        <input type="range" id="capRev" min="0" max="100" value="25"/>
-        <span class="capnum"><span id="capRevN">25</span>%</span>
-      </label>
-      <label class="cap">Pulse duration
-        <input type="range" id="joyMs" min="80" max="800" step="20" value="280"/>
-        <span class="capnum"><span id="joyMsN">280</span> ms</span>
-      </label>
-    </div>
-    <div class="row">
-      <button type="button" id="btnApplyCaps" class="accent">Apply caps</button>
-      <button type="button" id="btnApplyJoyMs">Apply pulse ms</button>
-    </div>
-    <div id="stickWrap"><div id="stickBase"></div><div id="stickKnob"></div></div>
-    <div class="joyread" id="joyRead">steer 0 · thr 0 · idle</div>
-    <p class="hint">Engage Pi control first. Stick sends capped DRIVE pulses (AUTO). Release stick to coast to stop.</p>
-  </section>
+  </div>
 
-  <section class="panel" style="grid-column: 1 / -1">
-    <h2>Event log</h2>
-    <pre id="log"></pre>
-  </section>
+  <div class="tab-panel" id="tab-drive">
+    <div class="grid">
+      <section class="panel full">
+        <h2>Virtual joystick</h2>
+        <div class="row">
+          <button type="button" id="btnPiOn" class="ok">Pi control ON</button>
+          <button type="button" id="btnPiOff" class="bad">Pi control OFF</button>
+        </div>
+        <div class="row">
+          <label class="cap">Forward cap
+            <input type="range" id="capFwd" min="0" max="100" value="25"/>
+            <span class="capnum"><span id="capFwdN">25</span>%</span>
+          </label>
+          <label class="cap">Reverse cap
+            <input type="range" id="capRev" min="0" max="100" value="25"/>
+            <span class="capnum"><span id="capRevN">25</span>%</span>
+          </label>
+          <label class="cap">Pulse duration
+            <input type="range" id="joyMs" min="80" max="800" step="20" value="280"/>
+            <span class="capnum"><span id="joyMsN">280</span> ms</span>
+          </label>
+        </div>
+        <div class="row">
+          <button type="button" id="btnApplyCaps" class="accent">Apply caps</button>
+          <button type="button" id="btnApplyJoyMs">Apply pulse ms</button>
+        </div>
+        <div id="stickWrap"><div id="stickBase"></div><div id="stickKnob"></div></div>
+        <div class="joyread" id="joyRead">steer 0 · thr 0 · idle</div>
+        <p class="hint">Engage Pi control first. Stick sends capped DRIVE pulses (AUTO). Release stick to coast to stop.</p>
+      </section>
+    </div>
+  </div>
+
+  <div class="tab-panel" id="tab-log">
+    <section class="panel">
+      <h2>Event log</h2>
+      <pre id="log"></pre>
+    </section>
+  </div>
 </div>
 
 <script>
@@ -588,6 +648,23 @@ const state = { pi: false, steer: 0, thr: 0, dragging: false, driveTimer: null }
 
 function $(id) { return document.getElementById(id); }
 function setErr(msg) { $("err").textContent = msg || ""; }
+
+function showTab(name) {
+  document.querySelectorAll(".tabs .tab").forEach(b => {
+    b.classList.toggle("active", b.dataset.tab === name);
+  });
+  document.querySelectorAll(".tab-panel").forEach(p => {
+    p.classList.toggle("active", p.id === "tab-" + name);
+  });
+  try { localStorage.setItem("rcTab", name); } catch (e) {}
+}
+document.querySelectorAll(".tabs .tab").forEach(btn => {
+  btn.onclick = () => showTab(btn.dataset.tab);
+});
+try {
+  const saved = localStorage.getItem("rcTab");
+  if (saved && $("tab-" + saved)) showTab(saved);
+} catch (e) {}
 
 function fmtCm(cm) {
   if (cm === null || cm === undefined || cm < 0) return "—";
@@ -719,15 +796,27 @@ async function post(path, body) {
 
 $("btnSonarOn").onclick = () => post("/api/sonar/on");
 $("btnSonarOff").onclick = () => post("/api/sonar/off");
-$("btnPullL").onclick = () => post("/api/pullover/left");
-$("btnPullR").onclick = () => post("/api/pullover/right");
-$("btnPullAbort").onclick = () => post("/api/pullover/abort");
+const pullL = () => post("/api/pullover/left");
+const pullR = () => post("/api/pullover/right");
+const pullAbort = () => post("/api/pullover/abort");
+$("btnPullL").onclick = pullL;
+$("btnPullR").onclick = pullR;
+$("btnPullAbort").onclick = pullAbort;
+$("btnPullL2").onclick = pullL;
+$("btnPullR2").onclick = pullR;
+$("btnPullAbort2").onclick = pullAbort;
 $("btnStop").onclick = () => post("/api/stop");
 $("btnReset").onclick = () => post("/api/reset");
 $("btnManual").onclick = () => post("/api/manual");
 $("btnRefresh").onclick = () => post("/api/status");
 $("btnPiOn").onclick = () => post("/api/pi/on");
 $("btnPiOff").onclick = () => post("/api/pi/off");
+const detArm = () => post("/api/detection/arm");
+const detDisarm = () => post("/api/detection/disarm");
+$("btnDetArm").onclick = detArm;
+$("btnDetDisarm").onclick = detDisarm;
+$("btnDetArm2").onclick = detArm;
+$("btnDetDisarm2").onclick = detDisarm;
 
 function syncCapLabels() {
   $("capFwdN").textContent = $("capFwd").value;
@@ -772,8 +861,6 @@ $("detCool").oninput = () => { $("detCoolN").textContent = $("detCool").value; }
 $("detEvery").oninput = () => { $("detEveryN").textContent = $("detEvery").value; };
 $("detJpeg").oninput = () => { $("detJpegN").textContent = $("detJpeg").value; };
 
-$("btnDetArm").onclick = () => post("/api/detection/arm");
-$("btnDetDisarm").onclick = () => post("/api/detection/disarm");
 $("btnDetCfg").onclick = () => post("/api/detection/cfg", {
   wrong_streak_n: +$("detStreak").value,
   confidence_min: +$("detConf").value / 100,
